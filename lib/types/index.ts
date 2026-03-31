@@ -20,6 +20,7 @@ export interface LaundrySlot {
   endTime: string; // HH:MM format
   date: string; // YYYY-MM-DD
   bookedBy?: string; // userId
+  bookingQueue?: string[]; // queued userIds for this exact slot
   gender: 'male' | 'female';
   capacity: number; // 1 person per slot
 }
@@ -31,6 +32,7 @@ export interface GymSlot {
   endTime: string;
   date: string;
   bookedBy?: string;
+  bookingQueue?: string[];
   capacity: number;
 }
 

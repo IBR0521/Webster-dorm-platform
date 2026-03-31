@@ -3,11 +3,15 @@
 import { GymSlot } from '@/lib/types';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Clock3, Dumbbell } from 'lucide-react';
 
 interface GymSlotCardProps {
   slot: GymSlot;
   isBooked: boolean;
   isUserBooked: boolean;
+  bookedByName?: string;
+  nextInQueueName?: string;
   onBook: () => void;
   onCancel: () => void;
 }
@@ -16,34 +20,55 @@ export default function GymSlotCard({
   slot,
   isBooked,
   isUserBooked,
+  bookedByName,
+  nextInQueueName,
   onBook,
   onCancel,
 }: GymSlotCardProps) {
+  const status = isUserBooked ? 'your-session' : isBooked ? 'booked' : 'available';
+
   return (
-    <Card className={isUserBooked ? 'border-blue-300 bg-blue-50' : isBooked ? 'bg-gray-50' : ''}>
-      <CardContent className="pt-6">
-        <div className="space-y-3">
-          <div>
-            <p className="font-semibold text-gray-900">
+    <Card
+      className={`transition-all ${
+        isUserBooked
+          ? 'border-blue-200 bg-blue-50/70'
+          : isBooked
+          ? 'border-gray-200 bg-gray-50/70'
+          : 'border-emerald-200 bg-emerald-50/40 hover:shadow-sm'
+      }`}
+    >
+      <CardContent className="pt-5">
+        <div className="space-y-4">
+          <div className="flex items-start justify-between">
+            <p className="font-semibold text-gray-900 flex items-center gap-2">
+              <Clock3 className="h-4 w-4 text-gray-500" />
               {slot.startTime} - {slot.endTime}
             </p>
+            {status === 'available' && <Badge className="bg-emerald-600 hover:bg-emerald-600">Available</Badge>}
+            {status === 'booked' && <Badge variant="secondary">Booked</Badge>}
+            {status === 'your-session' && <Badge className="bg-blue-600 hover:bg-blue-600">Your Session</Badge>}
           </div>
 
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-block w-3 h-3 rounded-full ${
-                isUserBooked ? 'bg-blue-600' : isBooked ? 'bg-gray-400' : 'bg-green-500'
-              }`}
-            />
-            <span className="text-sm font-medium text-gray-700">
-              {isUserBooked ? 'Your Session' : isBooked ? 'Booked' : 'Available'}
-            </span>
+          <div className="rounded-lg border border-gray-200/80 bg-white/70 p-3">
+            <p className="text-xs text-gray-500 flex items-center gap-2">
+              <Dumbbell className="h-4 w-4" />
+              Session status
+            </p>
+            <p className="text-sm font-medium text-gray-800 mt-1">
+              {isUserBooked ? 'Reserved by you' : isBooked ? 'Reserved by another student' : 'Open for booking'}
+            </p>
+            {(bookedByName || nextInQueueName) && (
+              <div className="mt-2 space-y-1 text-xs text-gray-600">
+                {bookedByName && <p>Booked by: <span className="font-medium text-gray-800">{bookedByName}</span></p>}
+                {nextInQueueName && <p>Next turn: <span className="font-medium text-gray-800">{nextInQueueName}</span></p>}
+              </div>
+            )}
           </div>
 
           {!isBooked && !isUserBooked && (
             <Button
               onClick={onBook}
-              className="w-full bg-green-600 hover:bg-green-700"
+              className="w-full bg-emerald-600 hover:bg-emerald-700"
             >
               Book Session
             </Button>

@@ -97,9 +97,31 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const cancelLaundry = (slotId: string, userId: string): void => {
-    const updatedSlots = laundrySlots.map((s) =>
-      s.id === slotId && s.bookedBy === userId ? { ...s, bookedBy: undefined } : s
-    );
+    const updatedSlots = laundrySlots.map((s) => {
+      if (s.id !== slotId) {
+        // If the user is queued on other slots, leave them as-is; cancellation is per-slot.
+        return s;
+      }
+
+      // If user currently owns the slot, either promote next in queue or free it.
+      if (s.bookedBy === userId) {
+        if (s.bookingQueue && s.bookingQueue.length > 0) {
+          const [nextUser, ...restQueue] = s.bookingQueue;
+          return { ...s, bookedBy: nextUser, bookingQueue: restQueue };
+        }
+        return { ...s, bookedBy: undefined, bookingQueue: s.bookingQueue ?? [] };
+      }
+
+      // If user is only queued, remove them from the queue.
+      if (s.bookingQueue && s.bookingQueue.includes(userId)) {
+        return {
+          ...s,
+          bookingQueue: s.bookingQueue.filter((id) => id !== userId),
+        };
+      }
+
+      return s;
+    });
     setLaundrySlots(updatedSlots);
     saveLaundrySlots(updatedSlots);
   };
@@ -118,9 +140,28 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const cancelGym = (slotId: string, userId: string): void => {
-    const updatedSlots = gymSlots.map((s) =>
-      s.id === slotId && s.bookedBy === userId ? { ...s, bookedBy: undefined } : s
-    );
+    const updatedSlots = gymSlots.map((s) => {
+      if (s.id !== slotId) {
+        return s;
+      }
+
+      if (s.bookedBy === userId) {
+        if (s.bookingQueue && s.bookingQueue.length > 0) {
+          const [nextUser, ...restQueue] = s.bookingQueue;
+          return { ...s, bookedBy: nextUser, bookingQueue: restQueue };
+        }
+        return { ...s, bookedBy: undefined, bookingQueue: s.bookingQueue ?? [] };
+      }
+
+      if (s.bookingQueue && s.bookingQueue.includes(userId)) {
+        return {
+          ...s,
+          bookingQueue: s.bookingQueue.filter((id) => id !== userId),
+        };
+      }
+
+      return s;
+    });
     setGymSlots(updatedSlots);
     saveGymSlots(updatedSlots);
   };
@@ -196,10 +237,10 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
 
     laundryDates.forEach((date) => {
       for (let launderyNum = 1; launderyNum <= 8; launderyNum++) {
-        // Create 2-hour slots (e.g., 6-8, 8-10, 10-12, etc.)
-        for (let slotStart = 6; slotStart < 22; slotStart += 2) {
+        // Create 1-hour slots so users can choose flexible duration.
+        for (let slotStart = 6; slotStart < 22; slotStart += 1) {
           const startTime = `${String(slotStart).padStart(2, '0')}:00`;
-          const endTime = `${String(slotStart + 2).padStart(2, '0')}:00`;
+          const endTime = `${String(slotStart + 1).padStart(2, '0')}:00`;
 
           // Alternate gender availability
           const genders: ('male' | 'female')[] = ['male', 'female'];
@@ -212,6 +253,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
               date,
               gender,
               capacity: 1,
+              bookingQueue: [],
             });
           });
         }
@@ -234,6 +276,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
           endTime,
           date,
           capacity: 5,
+          bookingQueue: [],
         });
       }
     });
