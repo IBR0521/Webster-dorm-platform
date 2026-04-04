@@ -1,16 +1,16 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useSchedule } from '@/lib/context/ScheduleContext';
-import { formatDate, getNextNDays, getTimeInMinutes, addMinutes } from '@/lib/utils/helpers';
+import { formatDate, getNextNDays, getTimeInMinutes, addMinutes, isDateToday, isTimePast } from '@/lib/utils/helpers';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getUsers } from '@/lib/utils/storage';
 
 export default function LaundryPage() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const { laundrySlots, bookLaundry, cancelLaundry, getUserLaundryBookings } = useSchedule();
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [selectedLaundery, setSelectedLaundery] = useState<number>(1);
@@ -21,48 +21,55 @@ export default function LaundryPage() {
   // Load all users once (for names in "Booked by"/queue).
   const allUsers = useMemo(() => getUsers(), []);
 
-  const resolveUserName = (userId?: string): string | undefined => {
+  const resolveUser = (userId?: string) => {
     if (!userId) return undefined;
-    const user = allUsers.find((u) => u.id === userId);
-    return user ? `${user.name} ${user.surname}` : undefined;
+    return allUsers.find((u) => u.id === userId);
   };
 
   // Get next 14 days
-  const availableDates = useMemo(() => getNextNDays(14), []);
+  const availableDates = useMemo(() => {
+    const dates = getNextNDays(14);
+    if (isAdmin) return dates;
+
+    return dates.filter((date) => {
+      const day = new Date(date).getDay(); // 0 Sun, 1 Mon, ... 6 Sat
+      const allowedGender = day === 0 || day === 1 || day === 3 || day === 5 ? 'male' : 'female';
+      return allowedGender === currentUser.gender;
+    });
+  }, [currentUser.gender, isAdmin]);
+
+  useEffect(() => {
+    if (availableDates.length === 0) return;
+    if (!availableDates.includes(selectedDate)) {
+      setSelectedDate(availableDates[0]);
+    }
+  }, [availableDates, selectedDate]);
 
   // Filter slots for current user's gender and selected date
   const filteredSlots = useMemo(() => {
     return laundrySlots.filter(
       (slot) =>
         slot.date === selectedDate &&
-        slot.gender === currentUser.gender &&
-        slot.launderyNumber === selectedLaundery
+        (isAdmin || slot.gender === currentUser.gender) &&
+        slot.launderyNumber === selectedLaundery &&
+        (!isDateToday(selectedDate) || !isTimePast(slot.date, slot.startTime))
     );
-  }, [laundrySlots, selectedDate, selectedLaundery, currentUser.gender]);
+  }, [laundrySlots, selectedDate, selectedLaundery, currentUser.gender, isAdmin]);
 
   // Get user's bookings
   const userBookings = useMemo(() => {
     return getUserLaundryBookings(currentUser.id);
   }, [getUserLaundryBookings, currentUser.id]);
 
-  const slotSummary = useMemo(() => {
-    const available = filteredSlots.filter((slot) => !slot.bookedBy).length;
-    const mine = filteredSlots.filter((slot) => slot.bookedBy === currentUser.id).length;
-    const occupied = filteredSlots.length - available - mine;
-    return { total: filteredSlots.length, available, mine, occupied };
-  }, [filteredSlots, currentUser.id]);
-
-  const handleBookSlot = (slotId: string) => {
+  const getRequiredSlots = (slotId: string) => {
     const baseSlot = laundrySlots.find((s) => s.id === slotId);
-    if (!baseSlot) return;
+    if (!baseSlot) return [];
 
-    // Build the list of contiguous 1-hour slots for the selected duration
-    const startMinutes = getTimeInMinutes(baseSlot.startTime);
-    const requiredSlots = [];
+    const range = [];
     for (let i = 0; i < durationHours; i++) {
       const slotStart = addMinutes(baseSlot.startTime, i * 60);
       const slotEnd = addMinutes(slotStart, 60);
-      const slotForHour = laundrySlots.find(
+      const match = laundrySlots.find(
         (s) =>
           s.date === baseSlot.date &&
           s.gender === baseSlot.gender &&
@@ -70,25 +77,75 @@ export default function LaundryPage() {
           s.startTime === slotStart &&
           s.endTime === slotEnd
       );
-      if (!slotForHour) {
-        return;
-      }
-      requiredSlots.push(slotForHour);
+      if (!match) return [];
+      range.push(match);
     }
+    return range;
+  };
+
+  const timelineWindows = useMemo(() => {
+    const sorted = filteredSlots
+      .slice()
+      .sort((a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime));
+
+    const windows: { id: string; startTime: string; endTime: string; range: typeof filteredSlots }[] = [];
+
+    // Build non-overlapping windows based on selected duration.
+    for (let i = 0; i < sorted.length; i += durationHours) {
+      const base = sorted[i];
+      if (!base) continue;
+
+      const range = [];
+      let valid = true;
+      for (let j = 0; j < durationHours; j++) {
+        const targetStart = addMinutes(base.startTime, j * 60);
+        const targetEnd = addMinutes(targetStart, 60);
+        const match = sorted.find(
+          (s) => s.startTime === targetStart && s.endTime === targetEnd
+        );
+        if (!match) {
+          valid = false;
+          break;
+        }
+        range.push(match);
+      }
+
+      if (valid && range.length === durationHours) {
+        windows.push({
+          id: base.id,
+          startTime: base.startTime,
+          endTime: addMinutes(base.startTime, durationHours * 60),
+          range,
+        });
+      }
+    }
+
+    return windows;
+  }, [filteredSlots, durationHours, laundrySlots]);
+
+  const slotSummary = useMemo(() => {
+    const available = timelineWindows.filter((w) => w.range.every((s) => !s.bookedBy)).length;
+    const mine = timelineWindows.filter((w) => w.range.every((s) => s.bookedBy === currentUser.id)).length;
+    const occupied = timelineWindows.length - available - mine;
+    return { total: timelineWindows.length, available, mine, occupied };
+  }, [timelineWindows, currentUser.id]);
+
+  const handleBookSlot = (slotId: string) => {
+    const requiredSlots = getRequiredSlots(slotId);
+    if (requiredSlots.length !== durationHours) return;
 
     const allFree = requiredSlots.every((s) => !s.bookedBy);
 
     if (allFree) {
-      requiredSlots.forEach((s) =>
+      requiredSlots.forEach((s) => {
         bookLaundry({
           ...s,
           bookedBy: currentUser.id,
-        })
-      );
+        });
+      });
       return;
     }
 
-    // If not all are free, join the queue for each required slot instead.
     requiredSlots.forEach((s) => {
       const existingQueue = s.bookingQueue ?? [];
       if (s.bookedBy && s.bookedBy !== currentUser.id && !existingQueue.includes(currentUser.id)) {
@@ -107,16 +164,17 @@ export default function LaundryPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Laundry Scheduling</h1>
-        <p className="text-gray-600 mt-2">
-          Book your laundry slot. Available for {currentUser.gender === 'male' ? '4 days' : '3 days'} per month.
-        </p>
+        <h1 className="text-3xl font-bold text-gray-900">
+          {isAdmin ? 'Laundry Monitoring' : 'Laundry Scheduling'}
+        </h1>
       </div>
 
       {/* Filters */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Select Laundry Details</CardTitle>
+          <CardTitle className="text-lg">
+            {isAdmin ? 'Monitor Laundry Details' : 'Select Laundry Details'}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -150,23 +208,30 @@ export default function LaundryPage() {
               </select>
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration (hours)
-              </label>
-              <select
-                value={durationHours}
-                onChange={(e) => setDurationHours(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {[1, 2, 3].map((h) => (
-                  <option key={h} value={h}>
-                    {h} {h === 1 ? 'hour' : 'hours'}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {!isAdmin && (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Duration (hours)
+                </label>
+                <select
+                  value={durationHours}
+                  onChange={(e) => setDurationHours(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {[1, 2, 3].map((h) => (
+                    <option key={h} value={h}>
+                      {h} {h === 1 ? 'hour' : 'hours'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
+          {isAdmin && (
+            <p className="mt-4 text-sm text-gray-600">
+              Admin view is read-only. You can monitor who booked and who is next in queue.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -179,11 +244,12 @@ export default function LaundryPage() {
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary">Total: {slotSummary.total}</Badge>
             <Badge className="bg-emerald-600 hover:bg-emerald-600">Available: {slotSummary.available}</Badge>
-            <Badge className="bg-blue-600 hover:bg-blue-600">Your bookings: {slotSummary.mine}</Badge>
+            {!isAdmin && <Badge className="bg-blue-600 hover:bg-blue-600">Your bookings: {slotSummary.mine}</Badge>}
             <Badge variant="outline">Occupied: {slotSummary.occupied}</Badge>
+            {isAdmin && <Badge variant="outline">Admin monitoring mode</Badge>}
           </div>
         </div>
-        {filteredSlots.length > 0 ? (
+        {timelineWindows.length > 0 ? (
           <Card>
             <CardContent className="pt-4">
               <div className="text-sm text-gray-600 mb-3">
@@ -191,21 +257,21 @@ export default function LaundryPage() {
                 <span className="font-semibold">{formatDate(selectedDate)}</span>
               </div>
               <div className="divide-y border rounded-lg bg-white">
-                {filteredSlots
-                  .slice()
-                  .sort((a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime))
-                  .map((slot) => {
-                    const bookedByName = resolveUserName(slot.bookedBy);
-                    const nextInQueueName = resolveUserName(slot.bookingQueue?.[0]);
-                    const isBooked = !!slot.bookedBy;
-                    const isUserBooked = slot.bookedBy === currentUser.id;
+                {timelineWindows.map((window) => {
+                    const isRangeFullyFree = window.range.every((s) => !s.bookedBy);
+                    const isUserBooked = window.range.every((s) => s.bookedBy === currentUser.id);
+                    const queueMode = !isRangeFullyFree && !isUserBooked;
+                    const firstOccupied = window.range.find((s) => s.bookedBy);
+                    const bookedByUser = resolveUser(firstOccupied?.bookedBy);
+                    const nextInQueueUser = resolveUser(firstOccupied?.bookingQueue?.[0]);
+                    const laneLabel = window.range[0]?.gender ? window.range[0].gender.toUpperCase() : '';
                     return (
                       <div
-                        key={slot.id}
+                        key={window.id}
                         className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-4 py-3 ${
                           isUserBooked
                             ? 'bg-blue-50/70'
-                            : isBooked
+                            : queueMode
                             ? 'bg-gray-50/70'
                             : 'bg-emerald-50/40'
                         }`}
@@ -213,9 +279,11 @@ export default function LaundryPage() {
                         <div className="flex items-center gap-4">
                           <div className="min-w-[96px]">
                             <p className="font-semibold text-gray-900">
-                              {slot.startTime} - {slot.endTime}
+                              {window.startTime} - {window.endTime}
                             </p>
-                            <p className="text-xs text-gray-500">Laundry #{slot.launderyNumber}</p>
+                            <p className="text-xs text-gray-500">
+                              Laundry #{selectedLaundery} {isAdmin ? `• ${laneLabel}` : ''}
+                            </p>
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
@@ -223,49 +291,53 @@ export default function LaundryPage() {
                                 className={`inline-block w-2.5 h-2.5 rounded-full ${
                                   isUserBooked
                                     ? 'bg-blue-600'
-                                    : isBooked
+                                    : queueMode
                                     ? 'bg-gray-400'
                                     : 'bg-emerald-500'
                                 }`}
                               />
                               <span className="text-sm font-medium text-gray-800">
-                                {isUserBooked ? 'Your booking' : isBooked ? 'Booked' : 'Available'}
+                                {isUserBooked ? 'Your booking' : queueMode ? 'Queued / Booked' : 'Available'}
                               </span>
                             </div>
                             <div className="mt-1 space-y-0.5 text-xs text-gray-600">
-                              {bookedByName && (
+                              {bookedByUser && (
                                 <p>
                                   Booked by:{' '}
-                                  <span className="font-medium text-gray-800">{bookedByName}</span>
+                                  <span className="font-medium text-gray-800">
+                                    {bookedByUser?.name} {bookedByUser?.surname}
+                                  </span>{' '}
+                                  <span className="text-gray-500">(Room {bookedByUser?.roomNumber})</span>
                                 </p>
                               )}
-                              {nextInQueueName && (
+                              {nextInQueueUser && (
                                 <p>
                                   Next turn:{' '}
                                   <span className="font-medium text-gray-800">
-                                    {nextInQueueName}
+                                    {nextInQueueUser.name} {nextInQueueUser.surname}
                                   </span>
+                                  <span className="text-gray-500"> (Room {nextInQueueUser.roomNumber})</span>
                                 </p>
                               )}
                             </div>
                           </div>
                         </div>
                         <div className="flex gap-2 md:justify-end">
-                          {!isBooked && !isUserBooked && (
+                          {!isAdmin && !isUserBooked && (
                             <Button
                               size="sm"
                               className="bg-emerald-600 hover:bg-emerald-700"
-                              onClick={() => handleBookSlot(slot.id)}
+                              onClick={() => handleBookSlot(window.id)}
                             >
-                              Book {durationHours}h
+                              {queueMode ? `Join queue ${durationHours}h` : `Book ${durationHours}h`}
                             </Button>
                           )}
-                          {isUserBooked && (
+                          {!isAdmin && isUserBooked && (
                             <Button
                               size="sm"
                               variant="outline"
                               className="text-red-600 border-red-200 hover:bg-red-50"
-                              onClick={() => handleCancelSlot(slot.id)}
+                              onClick={() => handleCancelSlot(window.id)}
                             >
                               Cancel
                             </Button>
@@ -281,9 +353,11 @@ export default function LaundryPage() {
           <Card>
             <CardContent className="pt-8">
               <div className="text-center py-8">
-                <p className="text-gray-600 mb-4">No slots found for this laundry on this date</p>
+                <p className="text-gray-600 mb-4">
+                  No {durationHours}-hour windows found for this laundry on this date
+                </p>
                 <p className="text-sm text-gray-500">
-                  Try selecting a different date or laundry machine.
+                  Try another duration, date, or laundry machine.
                 </p>
               </div>
             </CardContent>
@@ -292,6 +366,7 @@ export default function LaundryPage() {
       </div>
 
       {/* User Bookings */}
+      {!isAdmin && (
       <div>
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Bookings</h2>
         {userBookings.length > 0 ? (
@@ -332,6 +407,7 @@ export default function LaundryPage() {
           </Card>
         )}
       </div>
+      )}
     </div>
   );
 }

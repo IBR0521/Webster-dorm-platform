@@ -1,3 +1,47 @@
+import type { CleanDuty, GymSlot } from '../types';
+
+/** Legacy storage may still have `bookedBy` (single user). */
+export type GymSlotInput = GymSlot & { bookedBy?: string };
+
+export const getGymBookedUserIds = (slot: GymSlotInput): string[] => {
+  const fromList = slot.bookedUserIds?.filter(Boolean) ?? [];
+  if (fromList.length > 0) {
+    return [...new Set(fromList)];
+  }
+  if (slot.bookedBy) {
+    return [slot.bookedBy];
+  }
+  return [];
+};
+
+export const gymSlotHasOpenSpot = (slot: GymSlotInput): boolean => {
+  const cap = slot.capacity ?? 10;
+  return getGymBookedUserIds(slot).length < cap;
+};
+
+/** Supports legacy stored duties that used a single `photoUrl`. */
+export type CleanDutyWithLegacyPhotos = CleanDuty & { photoUrl?: string };
+
+export const getCleanDutyPhotoUrls = (duty: CleanDutyWithLegacyPhotos): string[] => {
+  if (duty.photoUrls && duty.photoUrls.length > 0) {
+    return duty.photoUrls;
+  }
+  if (duty.photoUrl) {
+    return [duty.photoUrl];
+  }
+  return [];
+};
+
+/** Kitchen photo submissions are removed this long after upload (`submittedAt`). */
+export const KITCHEN_DUTY_SUBMISSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function isKitchenSubmissionExpired(duty: CleanDuty): boolean {
+  if (!duty.submittedAt) return false;
+  const submitted = new Date(duty.submittedAt as Date | string).getTime();
+  if (Number.isNaN(submitted)) return false;
+  return Date.now() - submitted >= KITCHEN_DUTY_SUBMISSION_TTL_MS;
+}
+
 // Generate ID
 export const generateId = (): string => {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;

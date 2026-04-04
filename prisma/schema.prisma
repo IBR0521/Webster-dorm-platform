@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id
+  email          String   @unique
+  passwordHash   String
+  name           String
+  surname        String
+  phone          String
+  roomNumber     String
+  gender         String
+  isAdmin        Boolean  @default(false)
+  registeredAt   DateTime @default(now())
+}
+
+model LaundrySlot {
+  id             String  @id
+  launderyNumber Int
+  startTime      String
+  endTime        String
+  date           String
+  bookedById     String?
+  bookingQueue   String  @default("[]") // JSON string array of user ids
+  gender         String
+  capacity       Int     @default(1)
+}
+
+model GymSlot {
+  id            String  @id
+  startTime     String
+  endTime       String
+  date          String
+  bookedUserIds String  @default("[]")
+  bookingQueue  String  @default("[]")
+  capacity      Int     @default(10)
+}
+
+model CleanDuty {
+  id                  String    @id
+  assignedRoom        String
+  kitchenFloor        Int?
+  assignedRoomNumber  String?
+  assignedUsers       String    @default("[]")
+  date                String
+  photoUrls           String?
+  status              String
+  submittedAt         DateTime?
+}
+
+model AdminComment {
+  id         String   @id
+  targetId   String
+  targetType String
+  authorId   String
+  content    String
+  createdAt  DateTime @default(now())
+  visibility String   @default("admin_only")
+}
+
+model StudentComment {
+  id          String   @id
+  dutyId      String?
+  commentType String?
+  authorId    String
+  content     String
+  createdAt   DateTime @default(now())
+}

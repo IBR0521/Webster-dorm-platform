@@ -3,44 +3,66 @@
 import { useState, useRef } from 'react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useSchedule } from '@/lib/context/ScheduleContext';
-import { formatDate, generateId } from '@/lib/utils/helpers';
+import { formatDate, generateId, getCleanDutyPhotoUrls } from '@/lib/utils/helpers';
 import { AdminComment } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import ExpandableDutyPhoto from '@/components/clean-duty/ExpandableDutyPhoto';
+import { getUsers } from '@/lib/utils/storage';
 
 export default function CommentsPanel() {
   const { currentUser } = useAuth();
-  const { adminComments, addAdminComment, cleanDuties } = useSchedule();
-  const [selectedDutyId, setSelectedDutyId] = useState<string | null>(null);
-  const [commentText, setCommentText] = useState('');
+  const {
+    adminComments,
+    cleanDuties,
+    getStudentCommentsForDuty,
+    getGeneralStudentComments,
+    addAdminComment,
+  } = useSchedule();
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const users = getUsers();
 
   if (!currentUser) return null;
 
   // Get duties with photos (to add comments to)
-  const dutiesWithPhotos = cleanDuties.filter((duty) => duty.photoUrl);
+  const dutiesWithPhotos = cleanDuties.filter(
+    (duty) => getCleanDutyPhotoUrls(duty).length > 0
+  );
 
-  const handleAddComment = (dutyId: string) => {
-    if (!commentText.trim()) return;
+  const handleReply = (studentCommentId: string) => {
+    if (!replyText.trim()) return;
 
     const newComment: AdminComment = {
       id: generateId(),
-      targetId: dutyId,
-      targetType: 'duty',
+      targetId: studentCommentId,
+      targetType: 'student_comment',
       authorId: currentUser.id,
-      content: commentText,
+      content: replyText,
       createdAt: new Date(),
       visibility: 'admin_only',
     };
 
     addAdminComment(newComment);
-    setCommentText('');
-    setSelectedDutyId(null);
+    setReplyText('');
+    setReplyTargetId(null);
   };
 
-  const getDutyComments = (dutyId: string) => {
-    return adminComments.filter((comment) => comment.targetId === dutyId);
+  const generalComments = getGeneralStudentComments()
+    .slice()
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const getAuthorLabel = (authorId: string) => {
+    const user = users.find((u) => u.id === authorId);
+    if (!user) return 'Unknown student';
+    return `${user.name} ${user.surname} (Room ${user.roomNumber})`;
   };
+
+  const getRepliesForStudentComment = (studentCommentId: string) =>
+    adminComments
+      .filter((comment) => comment.targetType === 'student_comment' && comment.targetId === studentCommentId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
     <Card>
@@ -48,10 +70,64 @@ export default function CommentsPanel() {
         <CardTitle>Admin Comments</CardTitle>
       </CardHeader>
       <CardContent>
+        {generalComments.length > 0 && (
+          <div className="mb-6 space-y-3 rounded-lg border border-purple-200 bg-purple-50 p-4">
+            <p className="text-sm font-semibold text-purple-900">General Student Comments</p>
+            {generalComments.map((comment) => (
+              <div key={comment.id} className="rounded border border-purple-100 bg-white p-3">
+                <p className="text-xs text-purple-700 mb-1">
+                  {getAuthorLabel(comment.authorId)} • {formatDate(comment.createdAt.toString())}
+                </p>
+                <p className="text-sm text-gray-800">{comment.content}</p>
+                <div className="mt-2 space-y-2">
+                  {getRepliesForStudentComment(comment.id).map((reply) => (
+                    <div key={reply.id} className="rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700">
+                      <p className="text-xs text-gray-500 mb-1">Admin reply • {formatDate(reply.createdAt.toString())}</p>
+                      {reply.content}
+                    </div>
+                  ))}
+                </div>
+                {replyTargetId === comment.id ? (
+                  <div className="mt-3 space-y-2">
+                    <textarea
+                      ref={textareaRef}
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      placeholder="Reply to this student..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      rows={3}
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => handleReply(comment.id)} disabled={!replyText.trim()}>
+                        Send Reply
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => { setReplyTargetId(null); setReplyText(''); }}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-3"
+                    onClick={() => {
+                      setReplyTargetId(comment.id);
+                      setTimeout(() => textareaRef.current?.focus(), 0);
+                    }}
+                  >
+                    Reply
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         {dutiesWithPhotos.length > 0 ? (
           <div className="space-y-4">
             {dutiesWithPhotos.map((duty) => {
-              const dutyComments = getDutyComments(duty.id);
+              const urls = getCleanDutyPhotoUrls(duty);
               return (
                 <div
                   key={duty.id}
@@ -61,68 +137,92 @@ export default function CommentsPanel() {
                   <div>
                     <p className="font-medium text-gray-900">{duty.assignedRoom}</p>
                     <p className="text-sm text-gray-600">
-                      {formatDate(duty.date)} • Status: {duty.status}
+                      {formatDate(duty.date)} • Status: {duty.status} • {urls.length} photo
+                      {urls.length === 1 ? '' : 's'}
                     </p>
                   </div>
 
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {urls.map((url, i) => (
+                      <div
+                        key={`${duty.id}-thumb-${i}`}
+                        className="overflow-hidden rounded-lg border border-gray-300 bg-neutral-950"
+                      >
+                        <div className="flex justify-center p-2">
+                          <ExpandableDutyPhoto
+                            src={url}
+                            alt={`${duty.assignedRoom} photo ${i + 1}`}
+                            downloadBaseName={`comment-duty-${duty.id}-${i + 1}`}
+                            imgClassName="h-auto max-h-56 w-auto max-w-full object-contain"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
                   {/* Comments */}
-                  {dutyComments.length > 0 && (
-                    <div className="space-y-2 bg-gray-50 rounded p-3">
-                      {dutyComments.map((comment) => (
+                  {getStudentCommentsForDuty(duty.id).length > 0 && (
+                    <div className="space-y-2 bg-blue-50 rounded p-3">
+                      <p className="text-xs font-semibold text-blue-800 uppercase">Student comments</p>
+                      {getStudentCommentsForDuty(duty.id).map((comment) => (
                         <div key={comment.id} className="text-sm">
-                          <p className="text-xs text-gray-500 mb-1">
-                            Admin • {formatDate(comment.createdAt.toString())}
+                          <p className="text-xs text-blue-700 mb-1">
+                            {formatDate(comment.createdAt.toString())}
                           </p>
-                          <p className="text-gray-700">{comment.content}</p>
+                          <p className="text-blue-900">{comment.content}</p>
                         </div>
                       ))}
                     </div>
                   )}
 
-                  {/* Comment Form */}
-                  {selectedDutyId === duty.id ? (
-                    <div className="space-y-2">
-                      <textarea
-                        ref={textareaRef}
-                        value={commentText}
-                        onChange={(e) => setCommentText(e.target.value)}
-                        placeholder="Add a comment about this submission..."
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        rows={3}
-                      />
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleAddComment(duty.id)}
-                          disabled={!commentText.trim()}
-                          className="bg-blue-600 hover:bg-blue-700"
-                        >
-                          Post Comment
-                        </Button>
+                  {getStudentCommentsForDuty(duty.id).map((studentComment) => (
+                    <div key={studentComment.id} className="rounded border border-gray-200 bg-gray-50 p-3 mt-2">
+                      <p className="text-xs text-gray-500 mb-1">
+                        {getAuthorLabel(studentComment.authorId)} • {formatDate(studentComment.createdAt.toString())}
+                      </p>
+                      <p className="text-sm text-gray-800">{studentComment.content}</p>
+                      <div className="mt-2 space-y-2">
+                        {getRepliesForStudentComment(studentComment.id).map((reply) => (
+                          <div key={reply.id} className="rounded border border-gray-200 bg-white p-2 text-sm text-gray-700">
+                            <p className="text-xs text-gray-500 mb-1">Admin reply • {formatDate(reply.createdAt.toString())}</p>
+                            {reply.content}
+                          </div>
+                        ))}
+                      </div>
+                      {replyTargetId === studentComment.id ? (
+                        <div className="mt-3 space-y-2">
+                          <textarea
+                            ref={textareaRef}
+                            value={replyText}
+                            onChange={(e) => setReplyText(e.target.value)}
+                            placeholder="Reply to this student..."
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            rows={3}
+                          />
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => handleReply(studentComment.id)} disabled={!replyText.trim()}>
+                              Send Reply
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => { setReplyTargetId(null); setReplyText(''); }}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
                         <Button
                           size="sm"
                           variant="outline"
+                          className="mt-3"
                           onClick={() => {
-                            setSelectedDutyId(null);
-                            setCommentText('');
+                            setReplyTargetId(studentComment.id);
+                            setTimeout(() => textareaRef.current?.focus(), 0);
                           }}
                         >
-                          Cancel
+                          Reply
                         </Button>
-                      </div>
+                      )}
                     </div>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setSelectedDutyId(duty.id);
-                        setTimeout(() => textareaRef.current?.focus(), 0);
-                      }}
-                    >
-                      Add Comment
-                    </Button>
-                  )}
+                  ))}
                 </div>
               );
             })}

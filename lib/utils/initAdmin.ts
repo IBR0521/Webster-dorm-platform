@@ -6,8 +6,13 @@
 import { User } from '../types';
 import { generateId } from './helpers';
 import { getUsers, saveUsers } from './storage';
+import { isDatabaseEnabled } from '../config/client';
 
 export const initializeAdminAccount = (): void => {
+  if (isDatabaseEnabled()) {
+    return;
+  }
+
   const users = getUsers();
 
   // Check if admin already exists

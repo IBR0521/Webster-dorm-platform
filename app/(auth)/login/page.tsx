@@ -18,7 +18,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
       startTransition(() => {
-        router.replace('/profile');
+        router.replace('/dashboard');
       });
     }
   }, [isAuthenticated, authLoading, router]);
@@ -49,7 +49,7 @@ export default function LoginPage() {
       const success = await login(formData.email, formData.password);
 
       if (success) {
-        router.replace('/profile');
+        router.replace('/dashboard');
       } else {
         setError('Invalid email or password');
       }

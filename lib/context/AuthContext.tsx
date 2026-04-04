@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { User } from '../types';
 import {
   getCurrentUser,
@@ -9,12 +9,17 @@ import {
   saveUsers,
 } from '../utils/storage';
 import { generateId } from '../utils/helpers';
+import { initializeAdminAccount } from '../utils/initAdmin';
+import { isDatabaseEnabled } from '../config/client';
 
 interface AuthContextType {
   currentUser: User | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<boolean>;
   register: (userData: Omit<User, 'id' | 'isAdmin' | 'registeredAt'>) => Promise<boolean>;
+  updateProfile: (
+    updates: Partial<Pick<User, 'name' | 'surname' | 'phone' | 'roomNumber' | 'gender'>>
+  ) => Promise<boolean>;
   logout: () => void;
   isAuthenticated: boolean;
   isAdmin: boolean;
@@ -28,23 +33,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [currentUser, setCurrentUserState] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Initialize on mount
-  useEffect(() => {
-    const user = getCurrentUser();
-    setCurrentUserState(user);
-    setIsLoading(false);
+  const loadMeFromApi = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
+      if (!res.ok) {
+        setCurrentUserState(null);
+        return;
+      }
+      const data = (await res.json()) as { user: User };
+      setCurrentUserState(data.user);
+    } catch {
+      setCurrentUserState(null);
+    }
   }, []);
 
-  const login = async (
-    email: string,
-    password: string
-  ): Promise<boolean> => {
+  useEffect(() => {
+    const run = async () => {
+      if (isDatabaseEnabled()) {
+        await loadMeFromApi();
+        setIsLoading(false);
+        return;
+      }
+
+      initializeAdminAccount();
+      const user = getCurrentUser();
+      setCurrentUserState(user);
+      setIsLoading(false);
+    };
+    void run();
+  }, [loadMeFromApi]);
+
+  const login = async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true);
     try {
-      // Mock authentication - in real app, this would call an API
+      if (isDatabaseEnabled()) {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email, password }),
+        });
+        if (!res.ok) {
+          setIsLoading(false);
+          return false;
+        }
+        const data = (await res.json()) as { user: User };
+        setCurrentUserState(data.user);
+        setIsLoading(false);
+        return true;
+      }
+
       const users = getUsers();
       const user = users.find((u) => u.email === email && u.password === password);
-
       if (user) {
         setCurrentUserState(user);
         setCurrentUser(user);
@@ -65,15 +105,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   ): Promise<boolean> => {
     setIsLoading(true);
     try {
-      const users = getUsers();
+      if (isDatabaseEnabled()) {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            name: userData.name,
+            surname: userData.surname,
+            email: userData.email,
+            phone: userData.phone,
+            roomNumber: userData.roomNumber,
+            gender: userData.gender,
+            password: userData.password,
+          }),
+        });
+        if (!res.ok) {
+          setIsLoading(false);
+          return false;
+        }
+        const data = (await res.json()) as { user: User };
+        setCurrentUserState(data.user);
+        setIsLoading(false);
+        return true;
+      }
 
-      // Check if user already exists
+      const users = getUsers();
       if (users.some((u) => u.email === userData.email)) {
         setIsLoading(false);
         return false;
       }
 
-      // Create new user
       const newUser: User = {
         ...userData,
         id: generateId(),
@@ -96,7 +158,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const logout = (): void => {
     setCurrentUserState(null);
+    if (isDatabaseEnabled()) {
+      void fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      return;
+    }
     setCurrentUser(null);
+  };
+
+  const updateProfile = async (
+    updates: Partial<Pick<User, 'name' | 'surname' | 'phone' | 'roomNumber' | 'gender'>>
+  ): Promise<boolean> => {
+    if (!currentUser) return false;
+
+    setIsLoading(true);
+    try {
+      if (isDatabaseEnabled()) {
+        const res = await fetch('/api/users/me', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(updates),
+        });
+        if (!res.ok) {
+          setIsLoading(false);
+          return false;
+        }
+        const data = (await res.json()) as { user: User };
+        setCurrentUserState(data.user);
+        setIsLoading(false);
+        return true;
+      }
+
+      const users = getUsers();
+      const updatedUser: User = { ...currentUser, ...updates };
+      const updatedUsers = users.map((u) => (u.id === currentUser.id ? updatedUser : u));
+
+      saveUsers(updatedUsers);
+      setCurrentUser(updatedUser);
+      setCurrentUserState(updatedUser);
+      setIsLoading(false);
+      return true;
+    } catch (error) {
+      console.error('Update profile error:', error);
+      setIsLoading(false);
+      return false;
+    }
   };
 
   const value: AuthContextType = {
@@ -104,6 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     isLoading,
     login,
     register,
+    updateProfile,
     logout,
     isAuthenticated: currentUser !== null,
     isAdmin: currentUser?.isAdmin ?? false,

@@ -31,52 +31,55 @@ export interface GymSlot {
   startTime: string;
   endTime: string;
   date: string;
-  bookedBy?: string;
+  /** Active bookings for this hour (up to `capacity` students) */
+  bookedUserIds?: string[];
   bookingQueue?: string[];
-  capacity: number;
+  capacity: number; // simultaneous bookings per 1-hour slot
 }
 
 // Clean Duty Types
 export interface CleanDuty {
   id: string;
   assignedRoom: string;
+  kitchenFloor?: number; // 1-4 floors, one kitchen per floor
+  assignedRoomNumber?: string;
   assignedUsers: string[]; // userIds
   date: string;
-  photoUrl?: string;
+  /** Proof-of-completion images (data URLs in mock storage) */
+  photoUrls?: string[];
   status: 'pending' | 'approved' | 'rejected';
   submittedAt?: Date;
-}
-
-// Game Club Types
-export interface GameClubSession {
-  id: string;
-  userId: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  durationHours: number;
-  createdAt: Date;
 }
 
 // Admin Comment Types
 export interface AdminComment {
   id: string;
   targetId: string; // dutyId, userId, etc.
-  targetType: 'duty' | 'user' | 'submission';
+  targetType: 'duty' | 'user' | 'submission' | 'student_comment';
   authorId: string; // adminId
   content: string;
   createdAt: Date;
   visibility: 'admin_only';
 }
 
+// Student Comment Types
+export interface StudentComment {
+  id: string;
+  dutyId?: string;
+  commentType?: 'duty' | 'general';
+  authorId: string;
+  content: string;
+  createdAt: Date;
+}
+
 // Scheduling Types
 export interface ScheduleItem {
   id: string;
-  type: 'laundry' | 'gym' | 'duty' | 'game_club';
+  type: 'laundry' | 'gym' | 'duty';
   title: string;
   date: string;
   startTime: string;
   endTime?: string;
   status: 'upcoming' | 'in_progress' | 'completed' | 'pending_approval';
-  details: LaundrySlot | GymSlot | CleanDuty | GameClubSession;
+  details: LaundrySlot | GymSlot | CleanDuty;
 }

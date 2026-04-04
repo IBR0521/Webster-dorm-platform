@@ -19,7 +19,7 @@ export default function HomePage() {
 
     startTransition(() => {
       // Send authenticated users to an in-app protected page.
-      router.replace(isAuthenticated ? '/profile' : '/login');
+      router.replace(isAuthenticated ? '/dashboard' : '/login');
     });
   }, [isAuthenticated, isLoading, router]);
 

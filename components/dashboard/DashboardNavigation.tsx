@@ -10,12 +10,12 @@ import {
   WashingMachine,
   Dumbbell,
   Sparkles,
-  Gamepad2,
   UserCircle,
   ShieldCheck,
   Menu,
   X,
   LogOut,
+  MessageSquare,
 } from 'lucide-react';
 
 export default function DashboardNavigation() {
@@ -31,15 +31,15 @@ export default function DashboardNavigation() {
 
   const navItems = [
     { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { label: 'Laundry', href: '/laundry', icon: WashingMachine },
-    { label: 'Gym', href: '/gym', icon: Dumbbell },
-    { label: 'Clean Duty', href: '/clean-duty', icon: Sparkles },
-    { label: 'Game Club', href: '/game-club', icon: Gamepad2 },
-    { label: 'Profile', href: '/profile', icon: UserCircle },
+    { label: 'Laundry', href: '/dashboard/laundry', icon: WashingMachine },
+    { label: 'Gym', href: '/dashboard/gym', icon: Dumbbell },
+    { label: 'Kitchen Duty', href: '/dashboard/clean-duty', icon: Sparkles },
+    { label: 'Comments', href: '/dashboard/comments', icon: MessageSquare },
+    { label: 'Profile', href: '/dashboard/profile', icon: UserCircle },
   ];
 
   const adminItems = [
-    { label: 'Admin Panel', href: '/admin', icon: ShieldCheck },
+    { label: 'Admin Panel', href: '/dashboard/admin', icon: ShieldCheck },
   ];
 
   const isActive = (href: string) => pathname === href;

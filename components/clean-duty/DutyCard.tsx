@@ -1,21 +1,20 @@
 'use client';
 
 import { CleanDuty } from '@/lib/types';
-import { formatDate } from '@/lib/utils/helpers';
+import { formatDate, getCleanDutyPhotoUrls } from '@/lib/utils/helpers';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import ExpandableDutyPhoto from '@/components/clean-duty/ExpandableDutyPhoto';
 
 interface DutyCardProps {
   duty: CleanDuty;
-  photoUrl?: string;
   onUploadPhoto: () => void;
 }
 
-export default function DutyCard({
-  duty,
-  photoUrl,
-  onUploadPhoto,
-}: DutyCardProps) {
+export default function DutyCard({ duty, onUploadPhoto }: DutyCardProps) {
+  const photoUrls = getCleanDutyPhotoUrls(duty);
+  const hasPhotos = photoUrls.length > 0;
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending':
@@ -46,7 +45,6 @@ export default function DutyCard({
     <Card>
       <CardContent className="pt-6">
         <div className="space-y-4">
-          {/* Duty Info */}
           <div>
             <p className="text-sm text-gray-600">{duty.assignedRoom}</p>
             <p className="text-lg font-semibold text-gray-900 mt-1">
@@ -54,7 +52,6 @@ export default function DutyCard({
             </p>
           </div>
 
-          {/* Status */}
           <div className="flex items-center gap-2">
             <span
               className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(
@@ -65,40 +62,44 @@ export default function DutyCard({
             </span>
           </div>
 
-          {/* Photo Preview */}
-          {photoUrl && (
+          {hasPhotos && (
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Submitted Photo</label>
-              <div className="relative w-full h-48 bg-gray-100 rounded-lg overflow-hidden">
-                <img
-                  src={photoUrl}
-                  alt="Duty completion"
-                  className="w-full h-full object-cover"
-                />
+              <label className="text-sm font-medium text-gray-700">
+                Submitted photos ({photoUrls.length})
+              </label>
+              <div className="space-y-4">
+                {photoUrls.map((url, i) => (
+                  <div
+                    key={`${duty.id}-photo-${i}`}
+                    className="overflow-hidden rounded-lg border border-gray-300 bg-neutral-950 shadow-inner"
+                  >
+                    <div className="flex justify-center px-2 py-3 sm:px-4 sm:py-4">
+                      <ExpandableDutyPhoto
+                        src={url}
+                        alt={`Duty completion ${i + 1}`}
+                        downloadBaseName={`duty-${duty.id}-photo-${i + 1}`}
+                        imgClassName="h-auto max-h-[min(88vh,920px)] w-auto max-w-full object-contain"
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Action Button */}
-          {!photoUrl && duty.status === 'pending' && (
-            <Button
-              onClick={onUploadPhoto}
-              className="w-full bg-blue-600 hover:bg-blue-700"
-            >
-              Upload Photo
+          {!hasPhotos && duty.status === 'pending' && (
+            <Button onClick={onUploadPhoto} className="w-full bg-blue-600 hover:bg-blue-700">
+              Upload photos
             </Button>
           )}
 
-          {!photoUrl && duty.status === 'rejected' && (
-            <Button
-              onClick={onUploadPhoto}
-              className="w-full bg-orange-600 hover:bg-orange-700"
-            >
-              Re-upload Photo
+          {!hasPhotos && duty.status === 'rejected' && (
+            <Button onClick={onUploadPhoto} className="w-full bg-orange-600 hover:bg-orange-700">
+              Re-upload photos
             </Button>
           )}
 
-          {photoUrl && duty.status === 'pending' && (
+          {hasPhotos && duty.status === 'pending' && (
             <div className="text-center py-3 bg-yellow-50 border border-yellow-200 rounded-lg">
               <p className="text-sm text-yellow-800">
                 ⏳ Waiting for admin approval
@@ -106,11 +107,9 @@ export default function DutyCard({
             </div>
           )}
 
-          {photoUrl && duty.status === 'approved' && (
+          {hasPhotos && duty.status === 'approved' && (
             <div className="text-center py-3 bg-green-50 border border-green-200 rounded-lg">
-              <p className="text-sm text-green-800">
-                ✅ Duty approved
-              </p>
+              <p className="text-sm text-green-800">✅ Duty approved</p>
             </div>
           )}
         </div>

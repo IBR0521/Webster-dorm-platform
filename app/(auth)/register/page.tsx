@@ -19,7 +19,7 @@ export default function RegisterPage() {
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
       startTransition(() => {
-        router.replace('/profile');
+        router.replace('/dashboard');
       });
     }
   }, [isAuthenticated, authLoading, router]);
@@ -99,7 +99,7 @@ export default function RegisterPage() {
       });
 
       if (success) {
-        router.replace('/profile');
+        router.replace('/dashboard');
       } else {
         setError('Email already registered. Please use a different email.');
       }

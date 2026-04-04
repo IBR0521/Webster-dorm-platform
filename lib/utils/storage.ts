@@ -3,8 +3,8 @@ import {
   LaundrySlot,
   GymSlot,
   CleanDuty,
-  GameClubSession,
   AdminComment,
+  StudentComment,
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -13,8 +13,8 @@ const STORAGE_KEYS = {
   LAUNDRY_SLOTS: 'webster_laundry_slots',
   GYM_SLOTS: 'webster_gym_slots',
   CLEAN_DUTIES: 'webster_clean_duties',
-  GAME_CLUB_SESSIONS: 'webster_game_club_sessions',
   ADMIN_COMMENTS: 'webster_admin_comments',
+  STUDENT_COMMENTS: 'webster_student_comments',
   INITIALIZED: 'webster_initialized',
 };
 
@@ -81,21 +81,6 @@ export const saveCleanDuties = (duties: CleanDuty[]): void => {
   localStorage.setItem(STORAGE_KEYS.CLEAN_DUTIES, JSON.stringify(duties));
 };
 
-// Game Club Management
-export const getGameClubSessions = (): GameClubSession[] => {
-  if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem(STORAGE_KEYS.GAME_CLUB_SESSIONS);
-  return data ? JSON.parse(data) : [];
-};
-
-export const saveGameClubSessions = (sessions: GameClubSession[]): void => {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(
-    STORAGE_KEYS.GAME_CLUB_SESSIONS,
-    JSON.stringify(sessions)
-  );
-};
-
 // Admin Comments Management
 export const getAdminComments = (): AdminComment[] => {
   if (typeof window === 'undefined') return [];
@@ -106,6 +91,18 @@ export const getAdminComments = (): AdminComment[] => {
 export const saveAdminComments = (comments: AdminComment[]): void => {
   if (typeof window === 'undefined') return;
   localStorage.setItem(STORAGE_KEYS.ADMIN_COMMENTS, JSON.stringify(comments));
+};
+
+// Student Comments Management
+export const getStudentComments = (): StudentComment[] => {
+  if (typeof window === 'undefined') return [];
+  const data = localStorage.getItem(STORAGE_KEYS.STUDENT_COMMENTS);
+  return data ? JSON.parse(data) : [];
+};
+
+export const saveStudentComments = (comments: StudentComment[]): void => {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(STORAGE_KEYS.STUDENT_COMMENTS, JSON.stringify(comments));
 };
 
 // Initialization Check
