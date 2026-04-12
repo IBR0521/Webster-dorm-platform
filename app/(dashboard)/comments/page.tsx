@@ -37,11 +37,11 @@ export default function CommentsPage() {
     [currentUser.id, getGeneralStudentCommentsByAuthor]
   );
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const content = message.trim();
     if (!content) return;
 
-    addStudentComment({
+    await addStudentComment({
       id: generateId(),
       commentType: 'general',
       authorId: currentUser.id,

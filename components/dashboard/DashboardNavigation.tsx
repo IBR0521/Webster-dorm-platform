@@ -33,7 +33,9 @@ export default function DashboardNavigation() {
     { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { label: 'Laundry', href: '/dashboard/laundry', icon: WashingMachine },
     { label: 'Gym', href: '/dashboard/gym', icon: Dumbbell },
-    { label: 'Kitchen Duty', href: '/dashboard/clean-duty', icon: Sparkles },
+    ...(!isAdmin
+      ? [{ label: 'Kitchen Duty', href: '/dashboard/clean-duty', icon: Sparkles } as const]
+      : []),
     { label: 'Comments', href: '/dashboard/comments', icon: MessageSquare },
     { label: 'Profile', href: '/dashboard/profile', icon: UserCircle },
   ];

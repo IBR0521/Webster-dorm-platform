@@ -1,6 +1,13 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+} from 'react';
 import {
   LaundrySlot,
   GymSlot,
@@ -34,8 +41,27 @@ import type { GymSlotInput, CleanDutyWithLegacyPhotos } from '../utils/helpers';
 import { isDatabaseEnabled } from '../config/client';
 import { useAuth } from './AuthContext';
 import { createFreshSchedule } from '../schedule/factory';
+import { toast } from 'sonner';
+import { apiErrorMessage } from '../utils/api-error';
 
 const GYM_SLOT_CAPACITY = 10;
+
+function mergeLaundrySlots(
+  prev: LaundrySlot[],
+  updates: LaundrySlot[]
+): LaundrySlot[] {
+  const m = new Map(updates.map((s) => [s.id, s]));
+  return prev.map((s) => m.get(s.id) ?? s);
+}
+
+function mergeGymSlots(prev: GymSlot[], updates: GymSlot[]): GymSlot[] {
+  const m = new Map(updates.map((s) => [s.id, s]));
+  return prev.map((s) => m.get(s.id) ?? s);
+}
+
+function mergeCleanDuty(prev: CleanDuty[], duty: CleanDuty): CleanDuty[] {
+  return prev.map((d) => (d.id === duty.id ? duty : d));
+}
 
 function normalizeGymSlotFromStorage(slot: GymSlotInput): GymSlot {
   const ids = getGymBookedUserIds(slot);
@@ -80,18 +106,23 @@ interface ScheduleContextType {
 
   // Clean Duty
   cleanDuties: CleanDuty[];
-  uploadDutyPhotos: (dutyId: string, photoUrls: string[]) => void;
+  uploadDutyPhotos: (dutyId: string, photoUrls: string[]) => Promise<void>;
   getUserCleanDuties: (userId: string) => CleanDuty[];
-  approveDuty: (dutyId: string) => void;
-  rejectDuty: (dutyId: string) => void;
-  assignDutyUsers: (dutyId: string, userIds: string[], roomNumber?: string) => void;
+  approveDuty: (dutyId: string) => Promise<void>;
+  rejectDuty: (dutyId: string) => Promise<void>;
+  assignDutyUsers: (
+    dutyId: string,
+    userIds: string[],
+    roomNumber?: string
+  ) => Promise<void>;
 
   // Admin Comments
   adminComments: AdminComment[];
-  addAdminComment: (comment: AdminComment) => void;
+  addAdminComment: (comment: AdminComment) => Promise<void>;
+  deleteAdminComment: (commentId: string) => Promise<void>;
   getCommentsForTarget: (targetId: string) => AdminComment[];
   studentComments: StudentComment[];
-  addStudentComment: (comment: StudentComment) => void;
+  addStudentComment: (comment: StudentComment) => Promise<void>;
   getStudentCommentsForDuty: (dutyId: string) => StudentComment[];
   getStudentCommentsForDutyByAuthor: (dutyId: string, authorId: string) => StudentComment[];
   getGeneralStudentComments: () => StudentComment[];
@@ -99,6 +130,13 @@ interface ScheduleContextType {
 
   // Initialization
   initializeData: () => void;
+
+  /** Database mode: atomic booking APIs + full refresh */
+  refreshSchedule: () => Promise<void>;
+  submitLaundryBook: (slotIds: string[]) => Promise<void>;
+  submitLaundryCancel: (slotIds: string[]) => Promise<void>;
+  submitGymBook: (slotIds: string[]) => Promise<void>;
+  submitGymCancel: (slotIds: string[]) => Promise<void>;
 }
 
 const ScheduleContext = createContext<ScheduleContextType | undefined>(
@@ -113,10 +151,8 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
   const [cleanDuties, setCleanDuties] = useState<CleanDuty[]>([]);
   const [adminComments, setAdminComments] = useState<AdminComment[]>([]);
   const [studentComments, setStudentComments] = useState<StudentComment[]>([]);
-  const [scheduleHydrated, setScheduleHydrated] = useState(false);
 
   const { currentUser } = useAuth();
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cleanDutiesRef = useRef(cleanDuties);
   cleanDutiesRef.current = cleanDuties;
@@ -126,11 +162,91 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
     return day === 1 || day === 3 || day === 5 || day === 0 ? 'male' : 'female';
   };
 
+  const refreshSchedule = useCallback(async (): Promise<void> => {
+    if (!isDatabaseEnabled()) return;
+    const res = await fetch('/api/schedule', { credentials: 'include' });
+    if (!res.ok) {
+      toast.error(await apiErrorMessage(res));
+      return;
+    }
+    const data = (await res.json()) as {
+      laundrySlots: LaundrySlot[];
+      gymSlots: GymSlot[];
+      cleanDuties: CleanDuty[];
+      adminComments: AdminComment[];
+      studentComments: StudentComment[];
+    };
+    setLaundrySlots(data.laundrySlots);
+    setGymSlots(data.gymSlots);
+    setCleanDuties(data.cleanDuties);
+    setAdminComments(data.adminComments);
+    setStudentComments(data.studentComments);
+  }, []);
+
+  const submitLaundryBook = useCallback(async (slotIds: string[]): Promise<void> => {
+    const res = await fetch('/api/laundry/book', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slotIds }),
+    });
+    if (!res.ok) {
+      toast.error(await apiErrorMessage(res));
+      return;
+    }
+    const data = (await res.json()) as { laundrySlots: LaundrySlot[] };
+    setLaundrySlots((prev) => mergeLaundrySlots(prev, data.laundrySlots));
+  }, []);
+
+  const submitLaundryCancel = useCallback(async (slotIds: string[]): Promise<void> => {
+    const res = await fetch('/api/laundry/cancel', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slotIds }),
+    });
+    if (!res.ok) {
+      toast.error(await apiErrorMessage(res));
+      return;
+    }
+    const data = (await res.json()) as { laundrySlots: LaundrySlot[] };
+    setLaundrySlots((prev) => mergeLaundrySlots(prev, data.laundrySlots));
+  }, []);
+
+  const submitGymBook = useCallback(async (slotIds: string[]): Promise<void> => {
+    const res = await fetch('/api/gym/book', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slotIds }),
+    });
+    if (!res.ok) {
+      toast.error(await apiErrorMessage(res));
+      return;
+    }
+    const data = (await res.json()) as { gymSlots: GymSlot[] };
+    setGymSlots((prev) => mergeGymSlots(prev, data.gymSlots));
+  }, []);
+
+  const submitGymCancel = useCallback(async (slotIds: string[]): Promise<void> => {
+    const res = await fetch('/api/gym/cancel', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slotIds }),
+    });
+    if (!res.ok) {
+      toast.error(await apiErrorMessage(res));
+      return;
+    }
+    const data = (await res.json()) as { gymSlots: GymSlot[] };
+    setGymSlots((prev) => mergeGymSlots(prev, data.gymSlots));
+  }, []);
+
   // Load schedule from API when using the database (after login).
   useEffect(() => {
     if (!isDatabaseEnabled()) return;
     if (!currentUser) {
-      setScheduleHydrated(false);
       setLaundrySlots([]);
       setGymSlots([]);
       setCleanDuties([]);
@@ -139,11 +255,16 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
     let cancelled = false;
-    setScheduleHydrated(false);
     (async () => {
       try {
         const res = await fetch('/api/schedule', { credentials: 'include' });
-        if (cancelled || !res.ok) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          if (res.status !== 401) {
+            toast.error(await apiErrorMessage(res));
+          }
+          return;
+        }
         const data = (await res.json()) as {
           laundrySlots: LaundrySlot[];
           gymSlots: GymSlot[];
@@ -157,46 +278,19 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
         setCleanDuties(data.cleanDuties);
         setAdminComments(data.adminComments);
         setStudentComments(data.studentComments);
-        setScheduleHydrated(true);
       } catch (e) {
         console.error('Failed to load schedule', e);
+        if (!cancelled && process.env.NODE_ENV === 'development') {
+          toast.error(
+            'Cannot reach the dev server (e.g. localhost:3000). Start it with: npm run dev'
+          );
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [currentUser?.id]);
-
-  // Persist schedule to API (debounced) when using the database.
-  useEffect(() => {
-    if (!isDatabaseEnabled() || !scheduleHydrated) return;
-    if (persistTimer.current) clearTimeout(persistTimer.current);
-    persistTimer.current = setTimeout(() => {
-      persistTimer.current = null;
-      void fetch('/api/schedule', {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          laundrySlots,
-          gymSlots,
-          cleanDuties,
-          adminComments,
-          studentComments,
-        }),
-      }).catch((e) => console.error('Schedule sync failed', e));
-    }, 500);
-    return () => {
-      if (persistTimer.current) clearTimeout(persistTimer.current);
-    };
-  }, [
-    laundrySlots,
-    gymSlots,
-    cleanDuties,
-    adminComments,
-    studentComments,
-    scheduleHydrated,
-  ]);
 
   // Initialize data on mount (localStorage mode only)
   useEffect(() => {
@@ -304,9 +398,42 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, []);
 
-  // Auto-expire finished slot bookings every minute.
+  // Auto-expire finished slot bookings every minute (local) or server tick (database).
   useEffect(() => {
     const clearExpiredBookings = () => {
+      if (isDatabaseEnabled()) {
+        if (!currentUser) return;
+        void (async () => {
+          const res = await fetch('/api/schedule/expire', {
+            method: 'POST',
+            credentials: 'include',
+          });
+          if (!res.ok) {
+            if (res.status !== 401) {
+              console.warn('schedule/expire failed', res.status);
+            }
+            return;
+          }
+          const j = (await res.json()) as {
+            schedule?: {
+              laundrySlots: LaundrySlot[];
+              gymSlots: GymSlot[];
+              cleanDuties: CleanDuty[];
+              adminComments: AdminComment[];
+              studentComments: StudentComment[];
+            };
+          };
+          if (j.schedule) {
+            setLaundrySlots(j.schedule.laundrySlots);
+            setGymSlots(j.schedule.gymSlots);
+            setCleanDuties(j.schedule.cleanDuties);
+            setAdminComments(j.schedule.adminComments);
+            setStudentComments(j.schedule.studentComments);
+          }
+        })();
+        return;
+      }
+
       setLaundrySlots((prev) => {
         let changed = false;
         const updated = prev.map((slot) => {
@@ -396,20 +523,23 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
     };
 
     clearExpiredBookings();
-    const interval = setInterval(clearExpiredBookings, 60000);
+    // Avoid reloading ~4k slots every minute; server only returns schedule when expiry changed something.
+    const interval = setInterval(clearExpiredBookings, 3 * 60 * 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentUser?.id]);
 
-  // Laundry functions
+  // Laundry functions (localStorage only; database uses submitLaundryBook / submitLaundryCancel)
   const bookLaundry = (slot: LaundrySlot): void => {
+    if (isDatabaseEnabled()) return;
     const updatedSlots = laundrySlots.map((s) =>
       s.id === slot.id ? slot : s
     );
     setLaundrySlots(updatedSlots);
-    if (!isDatabaseEnabled()) saveLaundrySlots(updatedSlots);
+    saveLaundrySlots(updatedSlots);
   };
 
   const cancelLaundry = (slotId: string, userId: string): void => {
+    if (isDatabaseEnabled()) return;
     const updatedSlots = laundrySlots.map((s) => {
       if (s.id !== slotId) {
         // If the user is queued on other slots, leave them as-is; cancellation is per-slot.
@@ -436,23 +566,25 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
       return s;
     });
     setLaundrySlots(updatedSlots);
-    if (!isDatabaseEnabled()) saveLaundrySlots(updatedSlots);
+    saveLaundrySlots(updatedSlots);
   };
 
   const getUserLaundryBookings = (userId: string): LaundrySlot[] => {
     return laundrySlots.filter((s) => s.bookedBy === userId);
   };
 
-  // Gym functions
+  // Gym functions (localStorage only; database uses submitGymBook / submitGymCancel)
   const bookGym = (slot: GymSlot): void => {
+    if (isDatabaseEnabled()) return;
     setGymSlots((prev) => {
       const updatedSlots = prev.map((s) => (s.id === slot.id ? slot : s));
-      if (!isDatabaseEnabled()) saveGymSlots(updatedSlots);
+      saveGymSlots(updatedSlots);
       return updatedSlots;
     });
   };
 
   const cancelGym = (slotId: string, userId: string): void => {
+    if (isDatabaseEnabled()) return;
     setGymSlots((prev) => {
       const updatedSlots = prev.map((s) => {
         if (s.id !== slotId) {
@@ -487,7 +619,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
 
         return s;
       });
-      if (!isDatabaseEnabled()) saveGymSlots(updatedSlots);
+      saveGymSlots(updatedSlots);
       return updatedSlots;
     });
   };
@@ -498,39 +630,103 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
-  // Clean Duty functions
-  const uploadDutyPhotos = (dutyId: string, photoUrls: string[]): void => {
+  const uploadDutyPhotos = async (
+    dutyId: string,
+    photoUrls: string[]
+  ): Promise<void> => {
     if (photoUrls.length === 0) return;
+    if (isDatabaseEnabled()) {
+      const res = await fetch(`/api/clean-duty/${dutyId}/photos`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photoUrls }),
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      const data = (await res.json()) as { cleanDuty: CleanDuty };
+      setCleanDuties((prev) => mergeCleanDuty(prev, data.cleanDuty));
+      return;
+    }
     const updatedDuties = cleanDuties.map((d) =>
       d.id === dutyId
         ? { ...d, photoUrls, status: 'pending' as const, submittedAt: new Date() }
         : d
     );
     setCleanDuties(updatedDuties);
-    if (!isDatabaseEnabled()) saveCleanDuties(updatedDuties);
+    saveCleanDuties(updatedDuties);
   };
 
   const getUserCleanDuties = (userId: string): CleanDuty[] => {
     return cleanDuties.filter((d) => d.assignedUsers.includes(userId));
   };
 
-  const approveDuty = (dutyId: string): void => {
+  const approveDuty = async (dutyId: string): Promise<void> => {
+    if (isDatabaseEnabled()) {
+      const res = await fetch(`/api/clean-duty/${dutyId}/approve`, {
+        method: 'PATCH',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      const data = (await res.json()) as { cleanDuty: CleanDuty };
+      setCleanDuties((prev) => mergeCleanDuty(prev, data.cleanDuty));
+      return;
+    }
     const updatedDuties = cleanDuties.map((d) =>
-      d.id === dutyId ? { ...d, status: 'approved' } : d
+      d.id === dutyId ? { ...d, status: 'approved' as const } : d
     );
     setCleanDuties(updatedDuties);
-    if (!isDatabaseEnabled()) saveCleanDuties(updatedDuties);
+    saveCleanDuties(updatedDuties);
   };
 
-  const rejectDuty = (dutyId: string): void => {
+  const rejectDuty = async (dutyId: string): Promise<void> => {
+    if (isDatabaseEnabled()) {
+      const res = await fetch(`/api/clean-duty/${dutyId}/reject`, {
+        method: 'PATCH',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      const data = (await res.json()) as { cleanDuty: CleanDuty };
+      setCleanDuties((prev) => mergeCleanDuty(prev, data.cleanDuty));
+      return;
+    }
     const updatedDuties = cleanDuties.map((d) =>
-      d.id === dutyId ? { ...d, status: 'rejected', photoUrls: undefined } : d
+      d.id === dutyId
+        ? { ...d, status: 'rejected' as const, photoUrls: undefined }
+        : d
     );
     setCleanDuties(updatedDuties);
-    if (!isDatabaseEnabled()) saveCleanDuties(updatedDuties);
+    saveCleanDuties(updatedDuties);
   };
 
-  const assignDutyUsers = (dutyId: string, userIds: string[], roomNumber?: string): void => {
+  const assignDutyUsers = async (
+    dutyId: string,
+    userIds: string[],
+    roomNumber?: string
+  ): Promise<void> => {
+    if (isDatabaseEnabled()) {
+      const res = await fetch(`/api/clean-duty/${dutyId}/assign`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds, roomNumber }),
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      const data = (await res.json()) as { cleanDuty: CleanDuty };
+      setCleanDuties((prev) => mergeCleanDuty(prev, data.cleanDuty));
+      return;
+    }
     const updatedDuties = cleanDuties.map((d) =>
       d.id === dutyId
         ? {
@@ -544,24 +740,79 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
         : d
     );
     setCleanDuties(updatedDuties);
-    if (!isDatabaseEnabled()) saveCleanDuties(updatedDuties);
+    saveCleanDuties(updatedDuties);
   };
 
-  // Admin Comments functions
-  const addAdminComment = (comment: AdminComment): void => {
+  const addAdminComment = async (comment: AdminComment): Promise<void> => {
+    if (isDatabaseEnabled()) {
+      const res = await fetch('/api/comments/admin', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetId: comment.targetId,
+          targetType: comment.targetType,
+          content: comment.content,
+        }),
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      const data = (await res.json()) as { adminComment: AdminComment };
+      setAdminComments((prev) => [...prev, data.adminComment]);
+      return;
+    }
     const updatedComments = [...adminComments, comment];
     setAdminComments(updatedComments);
-    if (!isDatabaseEnabled()) saveAdminComments(updatedComments);
+    saveAdminComments(updatedComments);
+  };
+
+  const deleteAdminComment = async (commentId: string): Promise<void> => {
+    if (isDatabaseEnabled()) {
+      const res = await fetch(`/api/comments/admin/${encodeURIComponent(commentId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      setAdminComments((prev) => prev.filter((c) => c.id !== commentId));
+      return;
+    }
+    const updated = adminComments.filter((c) => c.id !== commentId);
+    setAdminComments(updated);
+    saveAdminComments(updated);
   };
 
   const getCommentsForTarget = (targetId: string): AdminComment[] => {
     return adminComments.filter((c) => c.targetId === targetId);
   };
 
-  const addStudentComment = (comment: StudentComment): void => {
+  const addStudentComment = async (comment: StudentComment): Promise<void> => {
+    if (isDatabaseEnabled()) {
+      const res = await fetch('/api/comments/student', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dutyId: comment.dutyId,
+          commentType: comment.commentType,
+          content: comment.content,
+        }),
+      });
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res));
+        return;
+      }
+      const data = (await res.json()) as { studentComment: StudentComment };
+      setStudentComments((prev) => [...prev, data.studentComment]);
+      return;
+    }
     const updated = [...studentComments, comment];
     setStudentComments(updated);
-    if (!isDatabaseEnabled()) saveStudentComments(updated);
+    saveStudentComments(updated);
   };
 
   const getStudentCommentsForDuty = (dutyId: string): StudentComment[] => {
@@ -591,7 +842,6 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const initializeData = (): void => {
     if (isDatabaseEnabled()) {
-      setScheduleHydrated(false);
       void (async () => {
         try {
           const res = await fetch('/api/schedule/reset', {
@@ -599,8 +849,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
             credentials: 'include',
           });
           if (!res.ok) {
-            console.error('Schedule reset failed', res.status);
-            setScheduleHydrated(true);
+            toast.error(await apiErrorMessage(res));
             return;
           }
           const data = (await res.json()) as {
@@ -615,10 +864,8 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
           setCleanDuties(data.cleanDuties);
           setAdminComments(data.adminComments);
           setStudentComments(data.studentComments);
-          setScheduleHydrated(true);
         } catch (e) {
           console.error('Schedule reset failed', e);
-          setScheduleHydrated(true);
         }
       })();
       return;
@@ -653,6 +900,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
     assignDutyUsers,
     adminComments,
     addAdminComment,
+    deleteAdminComment,
     getCommentsForTarget,
     studentComments,
     addStudentComment,
@@ -661,6 +909,11 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({
     getGeneralStudentComments,
     getGeneralStudentCommentsByAuthor,
     initializeData,
+    refreshSchedule,
+    submitLaundryBook,
+    submitLaundryCancel,
+    submitGymBook,
+    submitGymCancel,
   };
 
   return (

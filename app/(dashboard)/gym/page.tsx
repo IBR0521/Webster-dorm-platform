@@ -3,11 +3,15 @@
 import { useState, useMemo } from 'react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useSchedule } from '@/lib/context/ScheduleContext';
+import { isDatabaseEnabled } from '@/lib/config/client';
 import {
   formatDate,
+  getLocalTodayDateString,
   getNextNDays,
   getTimeInMinutes,
   addMinutes,
+  buildNonOverlappingTimelineWindows,
+  mergeConsecutiveUserGymBookings,
   isDateToday,
   isTimePast,
   getGymBookedUserIds,
@@ -16,17 +20,23 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { getUsers } from '@/lib/utils/storage';
+import { useUserDirectory } from '@/hooks/use-user-directory';
 
 export default function GymPage() {
   const { currentUser, isAdmin } = useAuth();
-  const { gymSlots, bookGym, cancelGym, getUserGymBookings } = useSchedule();
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const {
+    gymSlots,
+    bookGym,
+    cancelGym,
+    submitGymBook,
+    submitGymCancel,
+  } = useSchedule();
+  const [selectedDate, setSelectedDate] = useState<string>(getLocalTodayDateString());
   const [durationHours, setDurationHours] = useState<number>(1);
 
   if (!currentUser) return null;
 
-  const allUsers = useMemo(() => getUsers(), []);
+  const { users: allUsers } = useUserDirectory();
 
   const resolveUser = (userId?: string) => {
     if (!userId) return undefined;
@@ -45,10 +55,11 @@ export default function GymPage() {
     );
   }, [gymSlots, selectedDate]);
 
-  // Get user's bookings
-  const userBookings = useMemo(() => {
-    return getUserGymBookings(currentUser.id);
-  }, [getUserGymBookings, currentUser.id]);
+  /** Contiguous multi-hour bookings → one row each (e.g. 13:00–16:00). */
+  const groupedGymSessions = useMemo(
+    () => mergeConsecutiveUserGymBookings(gymSlots, currentUser.id),
+    [gymSlots, currentUser.id]
+  );
 
   const getRequiredSlots = (slotId: string) => {
     const baseSlot = gymSlots.find((s) => s.id === slotId);
@@ -70,59 +81,38 @@ export default function GymPage() {
     return range;
   };
 
-  const timelineWindows = useMemo(() => {
-    const sorted = filteredSlots
-      .slice()
-      .sort((a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime));
-
-    const windows: { id: string; startTime: string; endTime: string; range: typeof filteredSlots }[] = [];
-
-    for (let i = 0; i < sorted.length; i += durationHours) {
-      const base = sorted[i];
-      if (!base) continue;
-
-      const range = [];
-      let valid = true;
-      for (let j = 0; j < durationHours; j++) {
-        const targetStart = addMinutes(base.startTime, j * 60);
-        const targetEnd = addMinutes(targetStart, 60);
-        const match = sorted.find(
-          (s) => s.startTime === targetStart && s.endTime === targetEnd
-        );
-        if (!match) {
-          valid = false;
-          break;
-        }
-        range.push(match);
-      }
-
-      if (valid && range.length === durationHours) {
-        windows.push({
-          id: base.id,
-          startTime: base.startTime,
-          endTime: addMinutes(base.startTime, durationHours * 60),
-          range,
-        });
-      }
-    }
-
-    return windows;
-  }, [filteredSlots, durationHours, gymSlots]);
+  const timelineWindows = useMemo(
+    () => buildNonOverlappingTimelineWindows(filteredSlots, durationHours),
+    [filteredSlots, durationHours]
+  );
 
   const slotSummary = useMemo(() => {
-    const available = timelineWindows.filter((w) =>
-      w.range.every((s) => gymSlotHasOpenSpot(s))
-    ).length;
-    const mine = timelineWindows.filter((w) =>
-      w.range.every((s) => getGymBookedUserIds(s).includes(currentUser.id))
-    ).length;
-    const occupied = timelineWindows.length - available - mine;
-    return { total: timelineWindows.length, available, mine, occupied };
+    let available = 0;
+    let mine = 0;
+    let fullOrQueue = 0;
+    for (const w of timelineWindows) {
+      const isMine = w.range.every((s) => getGymBookedUserIds(s).includes(currentUser.id));
+      const allHaveOpenSpot = w.range.every((s) => gymSlotHasOpenSpot(s));
+      if (isMine) mine += 1;
+      else if (allHaveOpenSpot) available += 1;
+      else fullOrQueue += 1;
+    }
+    return {
+      total: timelineWindows.length,
+      available,
+      mine,
+      occupied: fullOrQueue,
+    };
   }, [timelineWindows, currentUser.id]);
 
-  const handleBookSlot = (slotId: string) => {
+  const handleBookSlot = async (slotId: string) => {
     const requiredSlots = getRequiredSlots(slotId);
     if (requiredSlots.length !== durationHours) return;
+
+    if (isDatabaseEnabled()) {
+      await submitGymBook(requiredSlots.map((s) => s.id));
+      return;
+    }
 
     const allCanJoin = requiredSlots.every((s) => {
       const ids = getGymBookedUserIds(s);
@@ -155,13 +145,31 @@ export default function GymPage() {
     });
   };
 
-  const handleCancelSlot = (slotId: string) => {
+  const handleCancelSlot = async (slotId: string) => {
+    if (isDatabaseEnabled()) {
+      const requiredSlots = getRequiredSlots(slotId);
+      if (requiredSlots.length === durationHours) {
+        await submitGymCancel(requiredSlots.map((s) => s.id));
+      } else {
+        await submitGymCancel([slotId]);
+      }
+      return;
+    }
     const requiredSlots = getRequiredSlots(slotId);
     if (requiredSlots.length === durationHours) {
       requiredSlots.forEach((s) => cancelGym(s.id, currentUser.id));
     } else {
       cancelGym(slotId, currentUser.id);
     }
+  };
+
+  const handleCancelGroupedSession = async (slotIds: string[]) => {
+    if (slotIds.length === 0) return;
+    if (isDatabaseEnabled()) {
+      await submitGymCancel(slotIds);
+      return;
+    }
+    slotIds.forEach((id) => cancelGym(id, currentUser.id));
   };
 
   return (
@@ -363,23 +371,28 @@ export default function GymPage() {
       {!isAdmin && (
       <div>
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Gym Sessions</h2>
-        {userBookings.length > 0 ? (
+        {groupedGymSessions.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {userBookings.map((booking) => (
-              <Card key={booking.id}>
+            {groupedGymSessions.map((session) => (
+              <Card key={session.slotIds.join('-')}>
                 <CardContent className="pt-6">
                   <div className="space-y-2">
                     <p className="text-sm text-gray-600">
-                      {formatDate(booking.date)}
+                      {formatDate(session.date)}
                     </p>
                     <p className="font-semibold text-gray-900">
-                      {booking.startTime} - {booking.endTime}
+                      {session.startTime} - {session.endTime}
                     </p>
+                    {session.slotIds.length > 1 && (
+                      <p className="text-xs text-gray-500">
+                        {session.slotIds.length} consecutive hours
+                      </p>
+                    )}
                     <Button
                       variant="destructive"
                       size="sm"
                       className="w-full mt-4"
-                      onClick={() => handleCancelSlot(booking.id)}
+                      onClick={() => handleCancelGroupedSession(session.slotIds)}
                     >
                       Cancel Session
                     </Button>

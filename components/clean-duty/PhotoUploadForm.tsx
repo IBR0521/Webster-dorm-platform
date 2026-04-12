@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import ExpandableDutyPhoto from '@/components/clean-duty/ExpandableDutyPhoto';
@@ -10,8 +10,11 @@ const MAX_PHOTOS = 12;
 
 interface PhotoUploadFormProps {
   dutyId: string;
-  onUpload: (dutyId: string, photoUrls: string[]) => void;
   onCancel: () => void;
+  /** localStorage mode: data URLs */
+  onUpload?: (dutyId: string, photoUrls: string[]) => void;
+  /** Database + Supabase Storage: multipart upload via API */
+  onUploadFiles?: (dutyId: string, files: File[]) => Promise<void>;
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -23,14 +26,28 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+type FileEntry = { file: File; previewUrl: string };
+
 export default function PhotoUploadForm({
   dutyId,
-  onUpload,
   onCancel,
+  onUpload,
+  onUploadFiles,
 }: PhotoUploadFormProps) {
-  const [previews, setPreviews] = useState<string[]>([]);
+  const useFiles = Boolean(onUploadFiles);
+  const [dataUrlPreviews, setDataUrlPreviews] = useState<string[]>([]);
+  const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    return () => {
+      fileEntries.forEach((e) => URL.revokeObjectURL(e.previewUrl));
+    };
+  }, [fileEntries]);
+
+  const count = useFiles ? fileEntries.length : dataUrlPreviews.length;
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []).filter((f) =>
@@ -38,32 +55,73 @@ export default function PhotoUploadForm({
     );
     if (files.length === 0) return;
 
-    const room = MAX_PHOTOS - previews.length;
+    const room = MAX_PHOTOS - count;
     const slice = files.slice(0, Math.max(0, room));
     if (slice.length === 0) return;
+    setSubmitError(null);
 
     try {
-      const dataUrls = await Promise.all(slice.map(readFileAsDataUrl));
-      setPreviews((prev) => [...prev, ...dataUrls]);
+      if (useFiles) {
+        const added = slice.map((file) => ({
+          file,
+          previewUrl: URL.createObjectURL(file),
+        }));
+        setFileEntries((prev) => [...prev, ...added]);
+      } else {
+        const dataUrls = await Promise.all(slice.map(readFileAsDataUrl));
+        setDataUrlPreviews((prev) => [...prev, ...dataUrls]);
+      }
     } finally {
       e.target.value = '';
     }
   };
 
   const removeAt = (index: number) => {
-    setPreviews((prev) => prev.filter((_, i) => i !== index));
+    if (useFiles) {
+      setFileEntries((prev) => {
+        const next = prev.filter((_, i) => i !== index);
+        const removed = prev[index];
+        if (removed) URL.revokeObjectURL(removed.previewUrl);
+        return next;
+      });
+    } else {
+      setDataUrlPreviews((prev) => prev.filter((_, i) => i !== index));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (previews.length === 0) return;
+    if (count === 0) return;
 
-    setIsLoading(true);
-    setTimeout(() => {
-      onUpload(dutyId, previews);
-      setIsLoading(false);
-    }, 600);
+    if (useFiles && onUploadFiles) {
+      setIsLoading(true);
+      setSubmitError(null);
+      try {
+        await onUploadFiles(
+          dutyId,
+          fileEntries.map((e) => e.file)
+        );
+        onCancel();
+      } catch (err) {
+        setSubmitError(err instanceof Error ? err.message : 'Upload failed');
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    if (onUpload && dataUrlPreviews.length > 0) {
+      setIsLoading(true);
+      setTimeout(() => {
+        onUpload(dutyId, dataUrlPreviews);
+        setIsLoading(false);
+      }, 600);
+    }
   };
+
+  const previewSources = useFiles
+    ? fileEntries.map((e) => e.previewUrl)
+    : dataUrlPreviews;
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 px-3 py-8 sm:py-10">
@@ -78,7 +136,7 @@ export default function PhotoUploadForm({
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">
-                Photos ({previews.length}/{MAX_PHOTOS})
+                Photos ({count}/{MAX_PHOTOS})
               </label>
               <input
                 type="file"
@@ -91,25 +149,25 @@ export default function PhotoUploadForm({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={previews.length >= MAX_PHOTOS}
+                disabled={count >= MAX_PHOTOS}
                 className="w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-6 transition-colors hover:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 flex flex-col items-center justify-center"
               >
                 <span className="text-3xl mb-2">📷</span>
                 <span className="text-sm text-gray-600">
-                  {previews.length >= MAX_PHOTOS
+                  {count >= MAX_PHOTOS
                     ? 'Maximum photos reached'
                     : 'Click to add one or more photos'}
                 </span>
               </button>
             </div>
 
-            {previews.length > 0 && (
+            {previewSources.length > 0 && (
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700">Preview</label>
                 <div className="flex flex-col gap-4">
-                  {previews.map((src, index) => (
+                  {previewSources.map((src, index) => (
                     <div
-                      key={`${index}-${src.slice(0, 32)}`}
+                      key={`${index}-${src.slice(0, 48)}`}
                       className="relative overflow-hidden rounded-lg border border-gray-300 bg-neutral-950 shadow-inner"
                     >
                       <button
@@ -140,6 +198,12 @@ export default function PhotoUploadForm({
               </p>
             </div>
 
+            {submitError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                {submitError}
+              </div>
+            )}
+
             <div className="flex gap-2">
               <Button
                 type="button"
@@ -152,10 +216,10 @@ export default function PhotoUploadForm({
               </Button>
               <Button
                 type="submit"
-                disabled={previews.length === 0 || isLoading}
+                disabled={count === 0 || isLoading}
                 className="flex-1 bg-blue-600 hover:bg-blue-700"
               >
-                {isLoading ? 'Submitting…' : `Submit ${previews.length} photo${previews.length === 1 ? '' : 's'}`}
+                {isLoading ? 'Submitting…' : `Submit ${count} photo${count === 1 ? '' : 's'}`}
               </Button>
             </div>
           </form>

@@ -8,22 +8,23 @@ import { AdminComment } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import ExpandableDutyPhoto from '@/components/clean-duty/ExpandableDutyPhoto';
-import { getUsers } from '@/lib/utils/storage';
+import { useUserDirectory } from '@/hooks/use-user-directory';
 
 export default function CommentsPanel() {
   const { currentUser } = useAuth();
+  const { users } = useUserDirectory();
   const {
     adminComments,
     cleanDuties,
     getStudentCommentsForDuty,
     getGeneralStudentComments,
     addAdminComment,
+    deleteAdminComment,
   } = useSchedule();
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const users = getUsers();
-
   if (!currentUser) return null;
 
   // Get duties with photos (to add comments to)
@@ -31,7 +32,7 @@ export default function CommentsPanel() {
     (duty) => getCleanDutyPhotoUrls(duty).length > 0
   );
 
-  const handleReply = (studentCommentId: string) => {
+  const handleReply = async (studentCommentId: string) => {
     if (!replyText.trim()) return;
 
     const newComment: AdminComment = {
@@ -44,7 +45,7 @@ export default function CommentsPanel() {
       visibility: 'admin_only',
     };
 
-    addAdminComment(newComment);
+    await addAdminComment(newComment);
     setReplyText('');
     setReplyTargetId(null);
   };
@@ -64,6 +65,16 @@ export default function CommentsPanel() {
       .filter((comment) => comment.targetType === 'student_comment' && comment.targetId === studentCommentId)
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
+  const handleRemoveReply = async (replyId: string) => {
+    if (!confirm('Remove this admin reply? Students will no longer see it.')) return;
+    setRemovingId(replyId);
+    try {
+      await deleteAdminComment(replyId);
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -82,7 +93,21 @@ export default function CommentsPanel() {
                 <div className="mt-2 space-y-2">
                   {getRepliesForStudentComment(comment.id).map((reply) => (
                     <div key={reply.id} className="rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700">
-                      <p className="text-xs text-gray-500 mb-1">Admin reply • {formatDate(reply.createdAt.toString())}</p>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs text-gray-500 mb-1">
+                          Admin reply • {formatDate(reply.createdAt.toString())}
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 shrink-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          disabled={removingId === reply.id}
+                          onClick={() => void handleRemoveReply(reply.id)}
+                        >
+                          {removingId === reply.id ? '…' : 'Remove'}
+                        </Button>
+                      </div>
                       {reply.content}
                     </div>
                   ))}
@@ -184,7 +209,21 @@ export default function CommentsPanel() {
                       <div className="mt-2 space-y-2">
                         {getRepliesForStudentComment(studentComment.id).map((reply) => (
                           <div key={reply.id} className="rounded border border-gray-200 bg-white p-2 text-sm text-gray-700">
-                            <p className="text-xs text-gray-500 mb-1">Admin reply • {formatDate(reply.createdAt.toString())}</p>
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-xs text-gray-500 mb-1">
+                                Admin reply • {formatDate(reply.createdAt.toString())}
+                              </p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 shrink-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                disabled={removingId === reply.id}
+                                onClick={() => void handleRemoveReply(reply.id)}
+                              >
+                                {removingId === reply.id ? '…' : 'Remove'}
+                              </Button>
+                            </div>
                             {reply.content}
                           </div>
                         ))}

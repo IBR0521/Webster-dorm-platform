@@ -7,7 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import PhotoApprovalPanel from '@/components/admin/PhotoApprovalPanel';
 import CommentsPanel from '@/components/admin/CommentsPanel';
 import { useSchedule } from '@/lib/context/ScheduleContext';
-import { getUsers } from '@/lib/utils/storage';
+import { useUserDirectory } from '@/hooks/use-user-directory';
+import { isDatabaseEnabled } from '@/lib/config/client';
+import { toast } from 'sonner';
 import { getCleanDutyPhotoUrls } from '@/lib/utils/helpers';
 import { Button } from '@/components/ui/button';
 
@@ -19,22 +21,21 @@ export default function AdminPage() {
     assignDutyUsers,
     initializeData,
     studentComments,
+    refreshSchedule,
   } = useSchedule();
   const [assignMessage, setAssignMessage] = useState('');
-  const users = useMemo(() => getUsers().filter((u) => !u.isAdmin), []);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const { users: directoryUsers, refetch: refetchDirectory } = useUserDirectory();
+  const users = useMemo(
+    () => directoryUsers.filter((u) => !u.isAdmin),
+    [directoryUsers]
+  );
 
   useEffect(() => {
     if (!isAdmin) {
       router.push('/dashboard');
     }
   }, [isAdmin, router]);
-
-  if (!isAdmin) return null;
-  if (!currentUser) return null;
-
-  const pendingSubmissions = cleanDuties.filter(
-    (d) => getCleanDutyPhotoUrls(d).length > 0 && d.status === 'pending'
-  ).length;
 
   const usersByRoom = useMemo(() => {
     const roomMap: Record<string, typeof users> = {};
@@ -47,6 +48,13 @@ export default function AdminPage() {
     return Object.entries(roomMap).sort((a, b) => Number(a[0]) - Number(b[0]));
   }, [users]);
 
+  if (!isAdmin) return null;
+  if (!currentUser) return null;
+
+  const pendingSubmissions = cleanDuties.filter(
+    (d) => getCleanDutyPhotoUrls(d).length > 0 && d.status === 'pending'
+  ).length;
+
   const getFloorFromRoom = (roomNumber: string): number | null => {
     if (!roomNumber) return null;
     const normalized = roomNumber.trim();
@@ -55,7 +63,7 @@ export default function AdminPage() {
     return firstDigit;
   };
 
-  const handleAssignRoomToNextDuty = (roomNumber: string) => {
+  const handleAssignRoomToNextDuty = async (roomNumber: string) => {
     const roomUsers = users.filter((u) => u.roomNumber === roomNumber);
     if (roomUsers.length === 0) return;
     const floor = getFloorFromRoom(roomNumber);
@@ -77,7 +85,7 @@ export default function AdminPage() {
       return;
     }
 
-    assignDutyUsers(
+    await assignDutyUsers(
       nextOpenDuty.id,
       roomUsers.map((u) => u.id),
       roomNumber
@@ -85,6 +93,33 @@ export default function AdminPage() {
     setAssignMessage(
       `Room ${roomNumber} assigned to floor ${floor} kitchen duty on ${nextOpenDuty.date}.`
     );
+  };
+
+  const handleDeleteStudent = async (u: (typeof users)[number]) => {
+    if (
+      !confirm(
+        `Remove ${u.name} ${u.surname} (${u.email}) from the app? Their bookings and comments will be cleared. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setDeletingId(u.id);
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(u.id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        toast.error(body.error || 'Could not remove user');
+        return;
+      }
+      toast.success('User removed from app database');
+      refetchDirectory();
+      await refreshSchedule();
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -223,6 +258,7 @@ export default function AdminPage() {
                     <th className="py-2 pr-4">Email</th>
                     <th className="py-2 pr-4">Phone</th>
                     <th className="py-2 pr-4">Room</th>
+                    {isDatabaseEnabled() && <th className="py-2 pr-4">Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -233,6 +269,19 @@ export default function AdminPage() {
                       <td className="py-2 pr-4">{user.email}</td>
                       <td className="py-2 pr-4">{user.phone}</td>
                       <td className="py-2 pr-4">{user.roomNumber}</td>
+                      {isDatabaseEnabled() && (
+                        <td className="py-2 pr-4">
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            disabled={deletingId === user.id}
+                            onClick={() => void handleDeleteStudent(user)}
+                          >
+                            {deletingId === user.id ? 'Removing…' : 'Remove'}
+                          </Button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

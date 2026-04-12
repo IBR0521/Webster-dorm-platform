@@ -1,18 +1,25 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 import { AuthProvider } from '@/lib/context/AuthContext'
 import { ScheduleProvider } from '@/lib/context/ScheduleContext'
+import { AppToaster } from '@/components/AppToaster'
 
 const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+}
 
 export const metadata: Metadata = {
   title: 'Webster University Dorm Management',
   description: 'Dorm management platform for Webster University Tashkent',
   generator: 'v0.app',
-  viewport: 'width=device-width, initial-scale=1, user-scalable=no',
   icons: {
     icon: [
       {
@@ -45,6 +52,7 @@ export default function RootLayout({
             {children}
           </ScheduleProvider>
         </AuthProvider>
+        <AppToaster />
         <Analytics />
       </body>
     </html>

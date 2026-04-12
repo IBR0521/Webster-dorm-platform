@@ -17,11 +17,11 @@ export default function PhotoApprovalPanel() {
   });
 
   const handleApprove = (dutyId: string) => {
-    approveDuty(dutyId);
+    void approveDuty(dutyId);
   };
 
   const handleReject = (dutyId: string) => {
-    rejectDuty(dutyId);
+    void rejectDuty(dutyId);
   };
 
   return (

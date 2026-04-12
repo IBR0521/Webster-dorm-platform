@@ -1,4 +1,4 @@
-import type { CleanDuty, GymSlot } from '../types';
+import type { CleanDuty, GymSlot, LaundrySlot } from '../types';
 
 /** Legacy storage may still have `bookedBy` (single user). */
 export type GymSlotInput = GymSlot & { bookedBy?: string };
@@ -83,26 +83,184 @@ export const addMinutes = (time: string, minutes: number): string => {
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 };
 
+/** One card per contiguous block (e.g. 13–14, 14–15, 15–16 → 13:00–16:00). */
+export function mergeConsecutiveUserGymBookings(
+  gymSlots: GymSlot[],
+  userId: string
+): { date: string; startTime: string; endTime: string; slotIds: string[] }[] {
+  const mine = gymSlots.filter((s) => getGymBookedUserIds(s as GymSlotInput).includes(userId));
+  const byDate = new Map<string, GymSlot[]>();
+  for (const s of mine) {
+    const list = byDate.get(s.date) ?? [];
+    list.push(s);
+    byDate.set(s.date, list);
+  }
+  const merged: { date: string; startTime: string; endTime: string; slotIds: string[] }[] = [];
+  for (const [, slots] of byDate) {
+    slots.sort((a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime));
+    let run: GymSlot[] = [];
+    const flush = () => {
+      if (run.length === 0) return;
+      merged.push({
+        date: run[0].date,
+        startTime: run[0].startTime,
+        endTime: run[run.length - 1].endTime,
+        slotIds: run.map((x) => x.id),
+      });
+      run = [];
+    };
+    for (const s of slots) {
+      if (run.length === 0) {
+        run = [s];
+        continue;
+      }
+      const last = run[run.length - 1];
+      if (last.endTime === s.startTime) {
+        run.push(s);
+      } else {
+        flush();
+        run = [s];
+      }
+    }
+    flush();
+  }
+  merged.sort(
+    (a, b) => a.date.localeCompare(b.date) || getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime)
+  );
+  return merged;
+}
+
+/** Contiguous laundry hours you hold as booker (same machine + gender + date). */
+export function mergeConsecutiveUserLaundryBookings(
+  laundrySlots: LaundrySlot[],
+  userId: string
+): { date: string; startTime: string; endTime: string; slotIds: string[]; launderyNumber: number }[] {
+  const mine = laundrySlots.filter((s) => s.bookedBy === userId);
+  const key = (s: LaundrySlot) => `${s.date}\0${s.launderyNumber}\0${s.gender}`;
+  const groups = new Map<string, LaundrySlot[]>();
+  for (const s of mine) {
+    const k = key(s);
+    const list = groups.get(k) ?? [];
+    list.push(s);
+    groups.set(k, list);
+  }
+  const merged: { date: string; startTime: string; endTime: string; slotIds: string[]; launderyNumber: number }[] =
+    [];
+  for (const slots of groups.values()) {
+    slots.sort((a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime));
+    let run: LaundrySlot[] = [];
+    const flush = () => {
+      if (run.length === 0) return;
+      merged.push({
+        date: run[0].date,
+        startTime: run[0].startTime,
+        endTime: run[run.length - 1].endTime,
+        slotIds: run.map((x) => x.id),
+        launderyNumber: run[0].launderyNumber,
+      });
+      run = [];
+    };
+    for (const s of slots) {
+      if (run.length === 0) {
+        run = [s];
+        continue;
+      }
+      const last = run[run.length - 1];
+      if (last.endTime === s.startTime) {
+        run.push(s);
+      } else {
+        flush();
+        run = [s];
+      }
+    }
+    flush();
+  }
+  merged.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.launderyNumber - b.launderyNumber || getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime)
+  );
+  return merged;
+}
+
+/**
+ * Build booking windows from 1-hour underlying slots.
+ * For multi-hour durations, uses a non-overlapping grid (e.g. 13–15, 15–17), not sliding starts every hour.
+ */
+export function buildNonOverlappingTimelineWindows<T extends { id: string; startTime: string; endTime: string }>(
+  slots: T[],
+  durationHours: number
+): { id: string; startTime: string; endTime: string; range: T[] }[] {
+  const sorted = [...slots].sort(
+    (a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime)
+  );
+  const windows: { id: string; startTime: string; endTime: string; range: T[] }[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    const base = sorted[i];
+    if (!base) {
+      i += 1;
+      continue;
+    }
+    const range: T[] = [];
+    let valid = true;
+    for (let j = 0; j < durationHours; j++) {
+      const targetStart = addMinutes(base.startTime, j * 60);
+      const targetEnd = addMinutes(targetStart, 60);
+      const match = sorted.find(
+        (s) => s.startTime === targetStart && s.endTime === targetEnd
+      );
+      if (!match) {
+        valid = false;
+        break;
+      }
+      range.push(match);
+    }
+    if (valid && range.length === durationHours) {
+      const windowEnd = addMinutes(base.startTime, durationHours * 60);
+      const endMin = getTimeInMinutes(windowEnd);
+      windows.push({
+        id: base.id,
+        startTime: base.startTime,
+        endTime: windowEnd,
+        range,
+      });
+      i += 1;
+      while (i < sorted.length && getTimeInMinutes(sorted[i].startTime) < endMin) {
+        i += 1;
+      }
+    } else {
+      i += 1;
+    }
+  }
+  return windows;
+}
+
+/** YYYY-MM-DD in the runtime's local calendar (avoids UTC day-shift from toISOString). */
+export const formatLocalDateString = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+export const getLocalTodayDateString = (): string => formatLocalDateString(new Date());
+
 // Date comparison
 export const isDateToday = (dateString: string): boolean => {
-  const today = new Date().toISOString().split('T')[0];
-  return dateString === today;
+  return dateString === getLocalTodayDateString();
 };
 
 export const isDatePast = (dateString: string): boolean => {
-  const today = new Date().toISOString().split('T')[0];
-  return dateString < today;
+  return dateString < getLocalTodayDateString();
 };
 
 export const isDateFuture = (dateString: string): boolean => {
-  const today = new Date().toISOString().split('T')[0];
-  return dateString > today;
+  return dateString > getLocalTodayDateString();
 };
 
 // Time comparison
 export const isTimePast = (dateString: string, timeString: string): boolean => {
   const now = new Date();
-  const currentDate = now.toISOString().split('T')[0];
+  const currentDate = getLocalTodayDateString();
   const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   if (dateString < currentDate) return true;
@@ -117,7 +275,7 @@ export const getNextNDays = (n: number): string[] => {
   for (let i = 0; i < n; i++) {
     const date = new Date(today);
     date.setDate(date.getDate() + i);
-    dates.push(date.toISOString().split('T')[0]);
+    dates.push(formatLocalDateString(date));
   }
   return dates;
 };

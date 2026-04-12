@@ -33,6 +33,7 @@ export default function RegisterPage() {
     phone: '',
     roomNumber: '',
     gender: 'male' as 'male' | 'female',
+    accountType: 'student' as 'student' | 'admin',
   });
 
   const handleChange = (
@@ -55,10 +56,15 @@ export default function RegisterPage() {
       !formData.email.trim() ||
       !formData.password.trim() ||
       !formData.confirmPassword.trim() ||
-      !formData.phone.trim() ||
-      !formData.roomNumber.trim()
+      !formData.phone.trim()
     ) {
       setError('All fields are required');
+      setIsLoading(false);
+      return;
+    }
+
+    if (formData.accountType === 'student' && !formData.roomNumber.trim()) {
+      setError('Room number is required for student accounts');
       setIsLoading(false);
       return;
     }
@@ -88,15 +94,21 @@ export default function RegisterPage() {
     }
 
     try {
-      const success = await register({
-        name: formData.name,
-        surname: formData.surname,
-        email: formData.email,
-        password: formData.password,
-        phone: formData.phone,
-        roomNumber: formData.roomNumber,
-        gender: formData.gender,
-      });
+      const success = await register(
+        {
+          name: formData.name,
+          surname: formData.surname,
+          email: formData.email,
+          password: formData.password,
+          phone: formData.phone,
+          roomNumber:
+            formData.accountType === 'admin'
+              ? formData.roomNumber.trim() || '—'
+              : formData.roomNumber.trim(),
+          gender: formData.gender,
+        },
+        { accountType: formData.accountType }
+      );
 
       if (success) {
         router.replace('/dashboard');
@@ -121,6 +133,42 @@ export default function RegisterPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <span className="text-sm font-medium text-gray-700">Account type</span>
+              <div className="flex gap-4 pt-1">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="accountType"
+                    value="student"
+                    checked={formData.accountType === 'student'}
+                    onChange={() => {
+                      setFormData((p) => ({ ...p, accountType: 'student' }));
+                      setError('');
+                    }}
+                    disabled={isLoading}
+                    className="h-4 w-4"
+                  />
+                  Student
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="accountType"
+                    value="admin"
+                    checked={formData.accountType === 'admin'}
+                    onChange={() => {
+                      setFormData((p) => ({ ...p, accountType: 'admin' }));
+                      setError('');
+                    }}
+                    disabled={isLoading}
+                    className="h-4 w-4"
+                  />
+                  Admin
+                </label>
+              </div>
+            </div>
+
             <div className="space-y-2">
               <label className="text-sm font-medium text-gray-700">Name</label>
               <Input
@@ -194,11 +242,20 @@ export default function RegisterPage() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Room Number</label>
+              <label className="text-sm font-medium text-gray-700">
+                Room Number
+                {formData.accountType === 'admin' && (
+                  <span className="font-normal text-gray-500"> (optional)</span>
+                )}
+              </label>
               <Input
                 type="text"
                 name="roomNumber"
-                placeholder="Enter your room number"
+                placeholder={
+                  formData.accountType === 'admin'
+                    ? 'Leave blank if not applicable'
+                    : 'Enter your room number'
+                }
                 value={formData.roomNumber}
                 onChange={handleChange}
                 disabled={isLoading}

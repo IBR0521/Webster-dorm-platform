@@ -11,12 +11,19 @@ import {
 import { generateId } from '../utils/helpers';
 import { initializeAdminAccount } from '../utils/initAdmin';
 import { isDatabaseEnabled } from '../config/client';
+import { toast } from 'sonner';
+import { apiErrorMessage } from '../utils/api-error';
+
+export type RegisterAccountType = 'student' | 'admin';
 
 interface AuthContextType {
   currentUser: User | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<boolean>;
-  register: (userData: Omit<User, 'id' | 'isAdmin' | 'registeredAt'>) => Promise<boolean>;
+  register: (
+    userData: Omit<User, 'id' | 'isAdmin' | 'registeredAt'>,
+    options?: { accountType?: RegisterAccountType }
+  ) => Promise<boolean>;
   updateProfile: (
     updates: Partial<Pick<User, 'name' | 'surname' | 'phone' | 'roomNumber' | 'gender'>>
   ) => Promise<boolean>;
@@ -74,6 +81,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           body: JSON.stringify({ email, password }),
         });
         if (!res.ok) {
+          toast.error(await apiErrorMessage(res));
           setIsLoading(false);
           return false;
         }
@@ -101,7 +109,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const register = async (
-    userData: Omit<User, 'id' | 'isAdmin' | 'registeredAt'>
+    userData: Omit<User, 'id' | 'isAdmin' | 'registeredAt'>,
+    options?: { accountType?: RegisterAccountType }
   ): Promise<boolean> => {
     setIsLoading(true);
     try {
@@ -118,9 +127,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             roomNumber: userData.roomNumber,
             gender: userData.gender,
             password: userData.password,
+            accountType: options?.accountType ?? 'student',
           }),
         });
         if (!res.ok) {
+          toast.error(await apiErrorMessage(res));
           setIsLoading(false);
           return false;
         }
@@ -139,7 +150,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       const newUser: User = {
         ...userData,
         id: generateId(),
-        isAdmin: false,
+        isAdmin: options?.accountType === 'admin',
         registeredAt: new Date(),
       };
 
@@ -180,6 +191,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           body: JSON.stringify(updates),
         });
         if (!res.ok) {
+          toast.error(await apiErrorMessage(res));
           setIsLoading(false);
           return false;
         }

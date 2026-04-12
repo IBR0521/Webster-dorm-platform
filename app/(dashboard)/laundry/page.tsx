@@ -3,23 +3,39 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useSchedule } from '@/lib/context/ScheduleContext';
-import { formatDate, getNextNDays, getTimeInMinutes, addMinutes, isDateToday, isTimePast } from '@/lib/utils/helpers';
+import { isDatabaseEnabled } from '@/lib/config/client';
+import {
+  formatDate,
+  getLocalTodayDateString,
+  getNextNDays,
+  getTimeInMinutes,
+  addMinutes,
+  buildNonOverlappingTimelineWindows,
+  mergeConsecutiveUserLaundryBookings,
+  isDateToday,
+  isTimePast,
+} from '@/lib/utils/helpers';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { getUsers } from '@/lib/utils/storage';
+import { useUserDirectory } from '@/hooks/use-user-directory';
 
 export default function LaundryPage() {
   const { currentUser, isAdmin } = useAuth();
-  const { laundrySlots, bookLaundry, cancelLaundry, getUserLaundryBookings } = useSchedule();
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const {
+    laundrySlots,
+    bookLaundry,
+    cancelLaundry,
+    submitLaundryBook,
+    submitLaundryCancel,
+  } = useSchedule();
+  const [selectedDate, setSelectedDate] = useState<string>(getLocalTodayDateString());
   const [selectedLaundery, setSelectedLaundery] = useState<number>(1);
   const [durationHours, setDurationHours] = useState<number>(1);
 
   if (!currentUser) return null;
 
-  // Load all users once (for names in "Booked by"/queue).
-  const allUsers = useMemo(() => getUsers(), []);
+  const { users: allUsers } = useUserDirectory();
 
   const resolveUser = (userId?: string) => {
     if (!userId) return undefined;
@@ -56,10 +72,10 @@ export default function LaundryPage() {
     );
   }, [laundrySlots, selectedDate, selectedLaundery, currentUser.gender, isAdmin]);
 
-  // Get user's bookings
-  const userBookings = useMemo(() => {
-    return getUserLaundryBookings(currentUser.id);
-  }, [getUserLaundryBookings, currentUser.id]);
+  const groupedLaundryBookings = useMemo(
+    () => mergeConsecutiveUserLaundryBookings(laundrySlots, currentUser.id),
+    [laundrySlots, currentUser.id]
+  );
 
   const getRequiredSlots = (slotId: string) => {
     const baseSlot = laundrySlots.find((s) => s.id === slotId);
@@ -83,56 +99,33 @@ export default function LaundryPage() {
     return range;
   };
 
-  const timelineWindows = useMemo(() => {
-    const sorted = filteredSlots
-      .slice()
-      .sort((a, b) => getTimeInMinutes(a.startTime) - getTimeInMinutes(b.startTime));
-
-    const windows: { id: string; startTime: string; endTime: string; range: typeof filteredSlots }[] = [];
-
-    // Build non-overlapping windows based on selected duration.
-    for (let i = 0; i < sorted.length; i += durationHours) {
-      const base = sorted[i];
-      if (!base) continue;
-
-      const range = [];
-      let valid = true;
-      for (let j = 0; j < durationHours; j++) {
-        const targetStart = addMinutes(base.startTime, j * 60);
-        const targetEnd = addMinutes(targetStart, 60);
-        const match = sorted.find(
-          (s) => s.startTime === targetStart && s.endTime === targetEnd
-        );
-        if (!match) {
-          valid = false;
-          break;
-        }
-        range.push(match);
-      }
-
-      if (valid && range.length === durationHours) {
-        windows.push({
-          id: base.id,
-          startTime: base.startTime,
-          endTime: addMinutes(base.startTime, durationHours * 60),
-          range,
-        });
-      }
-    }
-
-    return windows;
-  }, [filteredSlots, durationHours, laundrySlots]);
+  const timelineWindows = useMemo(
+    () => buildNonOverlappingTimelineWindows(filteredSlots, durationHours),
+    [filteredSlots, durationHours]
+  );
 
   const slotSummary = useMemo(() => {
-    const available = timelineWindows.filter((w) => w.range.every((s) => !s.bookedBy)).length;
-    const mine = timelineWindows.filter((w) => w.range.every((s) => s.bookedBy === currentUser.id)).length;
-    const occupied = timelineWindows.length - available - mine;
-    return { total: timelineWindows.length, available, mine, occupied };
+    let available = 0;
+    let mine = 0;
+    let other = 0;
+    for (const w of timelineWindows) {
+      const isMine = w.range.every((s) => s.bookedBy === currentUser.id);
+      const allFree = w.range.every((s) => !s.bookedBy);
+      if (isMine) mine += 1;
+      else if (allFree) available += 1;
+      else other += 1;
+    }
+    return { total: timelineWindows.length, available, mine, occupied: other };
   }, [timelineWindows, currentUser.id]);
 
-  const handleBookSlot = (slotId: string) => {
+  const handleBookSlot = async (slotId: string) => {
     const requiredSlots = getRequiredSlots(slotId);
     if (requiredSlots.length !== durationHours) return;
+
+    if (isDatabaseEnabled()) {
+      await submitLaundryBook(requiredSlots.map((s) => s.id));
+      return;
+    }
 
     const allFree = requiredSlots.every((s) => !s.bookedBy);
 
@@ -157,8 +150,26 @@ export default function LaundryPage() {
     });
   };
 
-  const handleCancelSlot = (slotId: string) => {
+  const handleCancelSlot = async (slotId: string) => {
+    if (isDatabaseEnabled()) {
+      const requiredSlots = getRequiredSlots(slotId);
+      const ids =
+        requiredSlots.length === durationHours
+          ? requiredSlots.map((s) => s.id)
+          : [slotId];
+      await submitLaundryCancel(ids);
+      return;
+    }
     cancelLaundry(slotId, currentUser.id);
+  };
+
+  const handleCancelGroupedBooking = async (slotIds: string[]) => {
+    if (slotIds.length === 0) return;
+    if (isDatabaseEnabled()) {
+      await submitLaundryCancel(slotIds);
+      return;
+    }
+    slotIds.forEach((id) => cancelLaundry(id, currentUser.id));
   };
 
   return (
@@ -369,10 +380,10 @@ export default function LaundryPage() {
       {!isAdmin && (
       <div>
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Bookings</h2>
-        {userBookings.length > 0 ? (
+        {groupedLaundryBookings.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {userBookings.map((booking) => (
-              <Card key={booking.id}>
+            {groupedLaundryBookings.map((booking) => (
+              <Card key={booking.slotIds.join('-')}>
                 <CardContent className="pt-6">
                   <div className="space-y-2">
                     <p className="font-semibold text-gray-900">
@@ -384,11 +395,16 @@ export default function LaundryPage() {
                     <p className="text-sm text-gray-600">
                       {booking.startTime} - {booking.endTime}
                     </p>
+                    {booking.slotIds.length > 1 && (
+                      <p className="text-xs text-gray-500">
+                        {booking.slotIds.length} consecutive hours
+                      </p>
+                    )}
                     <Button
                       variant="destructive"
                       size="sm"
                       className="w-full mt-4"
-                      onClick={() => handleCancelSlot(booking.id)}
+                      onClick={() => handleCancelGroupedBooking(booking.slotIds)}
                     >
                       Cancel Booking
                     </Button>

@@ -5,6 +5,14 @@ import { verifyPassword } from '@/lib/server/password';
 import { createSessionCookie } from '@/lib/server/session';
 import { userRowToUser } from '@/lib/server/schedule-repo';
 import { databaseUnavailable } from '@/lib/server/api-guard';
+import {
+  isSupabaseAuthUsersEnabled,
+  supabaseSignInWithPassword,
+} from '@/lib/server/supabase-auth-users';
+import {
+  ensureBootstrapAdminRole,
+  provisionAppUserFromSupabaseAuth,
+} from '@/lib/server/auth-provision';
 
 const bodySchema = z.object({
   email: z.string().email(),
@@ -27,12 +35,47 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
   }
 
-  const row = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+  const normalizedEmail = parsed.data.email.toLowerCase().trim();
+  const password = parsed.data.password;
+
+  if (isSupabaseAuthUsersEnabled()) {
+    const auth = await supabaseSignInWithPassword(normalizedEmail, password);
+    if (!('error' in auth)) {
+      let row =
+        (await prisma.user.findUnique({ where: { id: auth.userId } })) ??
+        (await prisma.user.findFirst({
+          where: { email: { equals: auth.email, mode: 'insensitive' } },
+        }));
+
+      if (!row) {
+        try {
+          row = await provisionAppUserFromSupabaseAuth({
+            authUserId: auth.userId,
+            email: auth.email,
+            userMetadata: auth.userMetadata,
+          });
+        } catch (e) {
+          console.error('provisionAppUserFromSupabaseAuth', e);
+        }
+      }
+
+      if (row) {
+        row = await ensureBootstrapAdminRole(row);
+        const user = userRowToUser(row);
+        const cookie = await createSessionCookie(row.id);
+        return NextResponse.json({ user }, { headers: { 'Set-Cookie': cookie } });
+      }
+    }
+  }
+
+  const row = await prisma.user.findFirst({
+    where: { email: { equals: normalizedEmail, mode: 'insensitive' } },
+  });
   if (!row) {
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }
 
-  const ok = await verifyPassword(parsed.data.password, row.passwordHash);
+  const ok = await verifyPassword(password, row.passwordHash);
   if (!ok) {
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
+import { isDatabaseEnabled } from '@/lib/config/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -116,11 +117,13 @@ export default function LoginPage() {
               </a>
             </p>
 
-            <div className="pt-4 border-t border-gray-200">
-              <p className="text-xs text-gray-500 text-center">
-                For testing: Use any registered email and any password to login
-              </p>
-            </div>
+            {!isDatabaseEnabled() && (
+              <div className="pt-4 border-t border-gray-200">
+                <p className="text-xs text-gray-500 text-center">
+                  Demo mode: use a registered email and password from local storage
+                </p>
+              </div>
+            )}
           </form>
         </CardContent>
       </Card>

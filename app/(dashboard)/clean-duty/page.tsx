@@ -1,41 +1,53 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useSchedule } from '@/lib/context/ScheduleContext';
 import { formatDate, isDateToday, generateId, getCleanDutyPhotoUrls } from '@/lib/utils/helpers';
+import { isDatabaseEnabled } from '@/lib/config/client';
+import { apiErrorMessage } from '@/lib/utils/api-error';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import PhotoUploadForm from '@/components/clean-duty/PhotoUploadForm';
 import DutyCard from '@/components/clean-duty/DutyCard';
 
 export default function CleanDutyPage() {
-  const { currentUser } = useAuth();
+  const router = useRouter();
+  const { currentUser, isAdmin } = useAuth();
   const {
     cleanDuties,
     uploadDutyPhotos,
     getUserCleanDuties,
     addStudentComment,
     getStudentCommentsForDutyByAuthor,
+    refreshSchedule,
   } = useSchedule();
   const [selectedDutyId, setSelectedDutyId] = useState<string | null>(null);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    if (currentUser && isAdmin) {
+      router.replace('/dashboard/admin');
+    }
+  }, [currentUser, isAdmin, router]);
+
   if (!currentUser) return null;
+  if (isAdmin) return null;
 
   const userDuties = getUserCleanDuties(currentUser.id);
 
-  const handlePhotoUpload = (dutyId: string, photoUrls: string[]) => {
-    uploadDutyPhotos(dutyId, photoUrls);
+  const handlePhotoUploadLocal = (dutyId: string, photoUrls: string[]) => {
+    void uploadDutyPhotos(dutyId, photoUrls);
     setSelectedDutyId(null);
   };
 
   const todaysDuty = userDuties.find((duty) => isDateToday(duty.date));
 
-  const handleAddComment = (dutyId: string) => {
+  const handleAddComment = async (dutyId: string) => {
     const content = (commentDrafts[dutyId] || '').trim();
     if (!content) return;
-    addStudentComment({
+    await addStudentComment({
       id: generateId(),
       dutyId,
       commentType: 'duty',
@@ -82,8 +94,27 @@ export default function CleanDutyPage() {
       {selectedDutyId && (
         <PhotoUploadForm
           dutyId={selectedDutyId}
-          onUpload={handlePhotoUpload}
           onCancel={() => setSelectedDutyId(null)}
+          onUpload={
+            !isDatabaseEnabled() ? handlePhotoUploadLocal : undefined
+          }
+          onUploadFiles={
+            isDatabaseEnabled()
+              ? async (dutyId, files) => {
+                  const fd = new FormData();
+                  files.forEach((f) => fd.append('photos', f));
+                  const res = await fetch(`/api/clean-duty/${dutyId}/photos`, {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'include',
+                  });
+                  if (!res.ok) {
+                    throw new Error(await apiErrorMessage(res));
+                  }
+                  await refreshSchedule();
+                }
+              : undefined
+          }
         />
       )}
 

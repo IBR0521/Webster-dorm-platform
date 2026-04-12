@@ -7,8 +7,9 @@ import type {
   User,
 } from '@/lib/types';
 import { prisma } from '@/lib/server/prisma';
+import { createFreshSchedule } from '@/lib/schedule/factory';
 
-function parseJsonArray(raw: string): string[] {
+export function parseJsonArray(raw: string): string[] {
   try {
     const v = JSON.parse(raw) as unknown;
     return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
@@ -126,13 +127,38 @@ export async function loadFullSchedule(): Promise<{
   adminComments: AdminComment[];
   studentComments: StudentComment[];
 }> {
-  const [laundry, gym, duties, admin, student] = await Promise.all([
+  let [laundry, gym, duties, admin, student] = await Promise.all([
     prisma.laundrySlot.findMany(),
     prisma.gymSlot.findMany(),
     prisma.cleanDuty.findMany(),
     prisma.adminComment.findMany(),
     prisma.studentComment.findMany(),
   ]);
+
+  const nothingScheduledYet =
+    laundry.length === 0 &&
+    gym.length === 0 &&
+    duties.length === 0 &&
+    admin.length === 0 &&
+    student.length === 0;
+
+  if (nothingScheduledYet) {
+    const fresh = createFreshSchedule();
+    await replaceFullSchedule({
+      laundrySlots: fresh.laundrySlots,
+      gymSlots: fresh.gymSlots,
+      cleanDuties: fresh.cleanDuties,
+      adminComments: [],
+      studentComments: [],
+    });
+    [laundry, gym, duties, admin, student] = await Promise.all([
+      prisma.laundrySlot.findMany(),
+      prisma.gymSlot.findMany(),
+      prisma.cleanDuty.findMany(),
+      prisma.adminComment.findMany(),
+      prisma.studentComment.findMany(),
+    ]);
+  }
 
   return {
     laundrySlots: laundry.map(laundryRowToSlot),
@@ -157,6 +183,9 @@ export async function loadFullSchedule(): Promise<{
     })),
   };
 }
+
+/** Auto-seed inserts thousands of rows; default Prisma interactive tx timeout (5s) is too low over pooler. */
+const REPLACE_SCHEDULE_TX_MS = 120_000;
 
 export async function replaceFullSchedule(input: {
   laundrySlots: LaundrySlot[];
@@ -245,5 +274,5 @@ export async function replaceFullSchedule(input: {
         })),
       });
     }
-  });
+  }, { timeout: REPLACE_SCHEDULE_TX_MS });
 }

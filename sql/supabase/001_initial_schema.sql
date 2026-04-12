@@ -1,9 +1,13 @@
 -- Webster dorm platform — PostgreSQL schema for Supabase
--- Run this in: Supabase Dashboard → SQL → New query → Run
+-- Run this in: Supabase Dashboard → SQL → New query → Run the WHOLE file (from line 1 to the end).
+-- Do not run 002 before this file — you will get: relation "User" does not exist.
 --
 -- Matches Prisma models in prisma/schema.prisma (column names use Prisma defaults).
--- After creating tables, set DATABASE_URL to your Supabase pooler URL and switch
--- prisma/schema.prisma datasource provider to "postgresql".
+-- After creating tables, set in .env.local:
+--   DATABASE_URL  = Supabase pooler (port 6543, transaction mode) for the app
+--   DIRECT_URL    = direct Postgres (port 5432) for prisma migrate
+-- prisma/schema.prisma uses provider "postgresql" with url + directUrl.
+-- RLS is enabled at the end of this file. See 002_rls_and_storage.sql for troubleshooting + Storage bucket notes.
 --
 -- RLS: These tables are intended for server-side access (Prisma + JWT). If you use
 -- the Supabase client from the browser, enable RLS and add policies; for API-only
@@ -90,3 +94,16 @@ CREATE INDEX IF NOT EXISTS "GymSlot_date_idx" ON "GymSlot" (date);
 CREATE INDEX IF NOT EXISTS "CleanDuty_date_idx" ON "CleanDuty" (date);
 CREATE INDEX IF NOT EXISTS "StudentComment_dutyId_idx" ON "StudentComment" ("dutyId");
 CREATE INDEX IF NOT EXISTS "AdminComment_targetId_idx" ON "AdminComment" ("targetId");
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Row Level Security (same run as above; requires tables to exist first)
+-- Blocks anon/authenticated Supabase Data API; Prisma (postgres role) bypasses RLS.
+-- Storage: create private bucket duty-photos in Dashboard → Storage (see 002 header).
+-- ─────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE "User" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "LaundrySlot" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "GymSlot" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "CleanDuty" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "AdminComment" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "StudentComment" ENABLE ROW LEVEL SECURITY;

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/server/prisma';
 import { userRowToUser } from '@/lib/server/schedule-repo';
-import { requireSessionUser } from '@/lib/server/api-guard';
+import { invalidateSessionUserCache, requireSessionUser } from '@/lib/server/api-guard';
 
 const patchSchema = z.object({
   name: z.string().min(1).optional(),
@@ -32,6 +32,8 @@ export async function PATCH(req: Request) {
     where: { id: r.dbUser.id },
     data: parsed.data,
   });
+
+  invalidateSessionUserCache(r.dbUser.id);
 
   return NextResponse.json({ user: userRowToUser(row) });
 }

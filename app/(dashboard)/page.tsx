@@ -13,7 +13,7 @@ import {
 } from '@/lib/utils/helpers';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { getUsers } from '@/lib/utils/storage';
+import { useUserDirectory } from '@/hooks/use-user-directory';
 import {
   CalendarClock,
   WashingMachine,
@@ -24,6 +24,7 @@ import {
 
 export default function DashboardPage() {
   const { currentUser, isAdmin } = useAuth();
+  const { users: directoryUsers } = useUserDirectory();
   const [nowTick, setNowTick] = useState(Date.now());
   const {
     laundrySlots,
@@ -33,12 +34,17 @@ export default function DashboardPage() {
     getUserCleanDuties,
   } = useSchedule();
 
-  if (!currentUser) return null;
-
   useEffect(() => {
     const interval = setInterval(() => setNowTick(Date.now()), 60000);
     return () => clearInterval(interval);
   }, []);
+
+  const residents = useMemo(
+    () => directoryUsers.filter((u) => !u.isAdmin),
+    [directoryUsers]
+  );
+
+  if (!currentUser) return null;
 
   const getCountdown = (date: string, time: string) => {
     const [hours, minutes] = time.split(':').map(Number);
@@ -75,8 +81,6 @@ export default function DashboardPage() {
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .slice(0, 1);
 
-  const allUsers = useMemo(() => getUsers().filter((u) => !u.isAdmin), []);
-
   if (isAdmin) {
     const upcomingLaundryAll = laundrySlots
       .filter(
@@ -101,7 +105,7 @@ export default function DashboardPage() {
       )
       .slice(0, 1);
 
-    const resolveUser = (userId?: string) => allUsers.find((u) => u.id === userId);
+    const resolveUser = (userId?: string) => directoryUsers.find((u) => u.id === userId);
     const totalQueues =
       laundrySlots.reduce((acc, slot) => acc + (slot.bookingQueue?.length ?? 0), 0) +
       gymSlots.reduce((acc, slot) => acc + (slot.bookingQueue?.length ?? 0), 0);
@@ -120,7 +124,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-gray-600">Students</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tracking-tight">{allUsers.length}</div><p className="text-xs text-gray-500 mt-1">Registered residents</p></CardContent></Card>
+          <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-gray-600">Students</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tracking-tight">{residents.length}</div><p className="text-xs text-gray-500 mt-1">Registered residents</p></CardContent></Card>
           <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-gray-600">Active Laundry Slots</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tracking-tight">{laundrySlots.filter((s) => !!s.bookedBy).length}</div><p className="text-xs text-gray-500 mt-1">Currently booked</p></CardContent></Card>
           <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-gray-600">Active Gym Slots</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tracking-tight">{gymSlots.filter((s) => getGymBookedUserIds(s).length > 0).length}</div><p className="text-xs text-gray-500 mt-1">Hours with at least one booking</p></CardContent></Card>
           <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-gray-600">Queue Waiting</CardTitle></CardHeader><CardContent><div className="text-2xl font-semibold tracking-tight">{totalQueues}</div><p className="text-xs text-gray-500 mt-1">Laundry + gym waiting list</p></CardContent></Card>
