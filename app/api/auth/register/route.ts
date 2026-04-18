@@ -13,6 +13,7 @@ import {
   supabaseAdminDeleteUser,
 } from '@/lib/server/supabase-auth-users';
 import { allowRegisterAsAdmin } from '@/lib/server/registration-policy';
+import { ensureBootstrapDevUsers } from '@/lib/server/bootstrap-dev-users';
 
 const bodySchema = z.object({
   name: z.string().min(1),
@@ -28,6 +29,13 @@ const bodySchema = z.object({
 export async function POST(req: Request) {
   const unavailable = databaseUnavailable();
   if (unavailable) return unavailable;
+
+  try {
+    await ensureBootstrapDevUsers();
+  } catch (e) {
+    console.error('ensureBootstrapDevUsers', e);
+    return NextResponse.json({ error: 'Database is not ready. Run migrations or check DATABASE_URL.' }, { status: 503 });
+  }
 
   let json: unknown;
   try {

@@ -41,8 +41,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isLoading, setIsLoading] = useState(true);
 
   const loadMeFromApi = useCallback(async () => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
     try {
-      const res = await fetch('/api/auth/me', { credentials: 'include' });
+      const res = await fetch('/api/auth/me', {
+        credentials: 'include',
+        signal: controller.signal,
+      });
       if (!res.ok) {
         setCurrentUserState(null);
         return;
@@ -51,6 +56,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setCurrentUserState(data.user);
     } catch {
       setCurrentUserState(null);
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }, []);
 

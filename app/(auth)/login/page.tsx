@@ -1,14 +1,17 @@
 'use client';
 
-import { useState, useEffect, useTransition } from 'react';
+import { useState, useEffect, useTransition, useId } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/context/AuthContext';
 import { isDatabaseEnabled } from '@/lib/config/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 
 export default function LoginPage() {
+  const emailId = useId();
+  const passwordId = useId();
   const router = useRouter();
   const { login, isAuthenticated, isLoading: authLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
@@ -28,6 +31,19 @@ export default function LoginPage() {
     email: '',
     password: '',
   });
+
+  // Optional: ?email=...&password=... pre-fills the form (query string is not sent to the API).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const email = params.get('email');
+    const password = params.get('password');
+    if (!email && !password) return;
+    setFormData((prev) => ({
+      email: email?.trim() || prev.email,
+      password: password ?? prev.password,
+    }));
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -62,8 +78,11 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md">
+    <div
+      className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4"
+      suppressHydrationWarning
+    >
+      <Card className="w-full max-w-md" suppressHydrationWarning>
         <CardHeader className="space-y-2">
           <CardTitle className="text-2xl font-bold">Login</CardTitle>
           <CardDescription>
@@ -73,26 +92,34 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Email</label>
+              <Label htmlFor={emailId} className="text-gray-700">
+                Email
+              </Label>
               <Input
+                id={emailId}
                 type="email"
                 name="email"
                 placeholder="Enter your email"
                 value={formData.email}
                 onChange={handleChange}
                 disabled={isLoading}
+                autoComplete="email"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Password</label>
+              <Label htmlFor={passwordId} className="text-gray-700">
+                Password
+              </Label>
               <Input
+                id={passwordId}
                 type="password"
                 name="password"
                 placeholder="Enter your password"
                 value={formData.password}
                 onChange={handleChange}
                 disabled={isLoading}
+                autoComplete="current-password"
               />
             </div>
 

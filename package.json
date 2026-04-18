@@ -5,7 +5,9 @@
   "scripts": {
     "clean": "rm -rf .next",
     "clean:all": "rm -rf .next node_modules",
-    "dev": "next dev -p 3001",
+    "predev": "node -e \"console.log('\\n  Dorm app (port 3002; leave 3000 for your other app):\\n  http://127.0.0.1:3002\\n')\"",
+    "dev": "next dev -p 3002",
+    "dev:https": "next dev -p 3002 --experimental-https",
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",

@@ -1,28 +1,12 @@
-'use client';
+import { redirect } from 'next/navigation';
+import { getSessionUserId } from '@/lib/server/session';
+import { HomeClientGate } from './HomeClientGate';
 
-import { useEffect, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '@/lib/context/AuthContext';
-import { initializeAdminAccount } from '@/lib/utils/initAdmin';
+export default async function HomePage() {
+  if (process.env.NEXT_PUBLIC_DATABASE_ENABLED === '1') {
+    const userId = await getSessionUserId();
+    redirect(userId ? '/dashboard' : '/login');
+  }
 
-export default function HomePage() {
-  const router = useRouter();
-  const { isAuthenticated, isLoading } = useAuth();
-  const [isPending, startTransition] = useTransition();
-
-  useEffect(() => {
-    initializeAdminAccount();
-  }, []);
-
-  useEffect(() => {
-    if (isLoading) return;
-
-    startTransition(() => {
-      // Send authenticated users to an in-app protected page.
-      router.replace(isAuthenticated ? '/dashboard' : '/login');
-    });
-  }, [isAuthenticated, isLoading, router]);
-
-  // Return empty while redirecting
-  return <div />;
+  return <HomeClientGate />;
 }
